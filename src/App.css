@@ -20,7 +20,7 @@ body {
 
 .navbar {
   background-color: white;
-  padding: 15px 40px;
+  padding: 5px 50px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -312,16 +312,18 @@ tr:hover td { background: #fafafa; }
 }
 
 .hero-section {
+  width: 100vw;
+  min-height: 100vh; /* full screen height */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 80px 10%;
+  padding: 100px 100px; /* controlled padding instead of % */
   background: linear-gradient(135deg, #E3F2FD 0%, #FFFFFF 100%);
-  min-height: 60vh;
+  box-sizing: border-box;
 }
 
 .hero-content {
-  max-width: 100%;
+  max-width: 1000px;
 }
 
 .hero-content h1 {
@@ -352,6 +354,10 @@ tr:hover td { background: #fafafa; }
 
 .hero-btn:hover {
   transform: translateY(-3px);
+}
+
+.hero-image {
+  font-size: 100px;
 }
 
 .services-section {

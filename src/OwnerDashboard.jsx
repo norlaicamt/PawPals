@@ -20,6 +20,24 @@ const CAT_BREEDS = [
   "Sphynx", "Mixed / Unknown", "Other"
 ];
 
+// --- TOAST COMPONENT ---
+const Toast = ({ message, type, onClose }) => {
+    if (!message) return null;
+    return (
+        <div style={{
+            position: "fixed", bottom: "20px", right: "20px", 
+            background: type === "error" ? "#f44336" : "#4CAF50",
+            color: "white", padding: "15px 25px", borderRadius: "8px", 
+            boxShadow: "0 4px 12px rgba(0,0,0,0.2)", zIndex: 3000, 
+            display: "flex", alignItems: "center", gap: "10px", animation: "slideIn 0.3s ease-out"
+        }}>
+            <span>{type === "error" ? "⚠️" : "✅"}</span>
+            <span style={{fontWeight: "500"}}>{message}</span>
+            <button onClick={onClose} style={{background:"none", border:"none", color:"white", marginLeft:"10px", cursor:"pointer", fontWeight:"bold"}}>✕</button>
+        </div>
+    );
+};
+
 const OwnerDashboard = () => {
   const navigate = useNavigate();
   const user = auth.currentUser;
@@ -27,6 +45,14 @@ const OwnerDashboard = () => {
 
   const [activeTab, setActiveTab] = useState("pets");
   const [apptFilter, setApptFilter] = useState("Pending");
+
+  // Toast State
+  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+
+  const showToast = (message, type = "success") => {
+      setToast({ show: true, message, type });
+      setTimeout(() => setToast({ show: false, message: "", type: "success" }), 3000);
+  };
 
   // Data States
   const [myPets, setMyPets] = useState([]);
@@ -40,6 +66,9 @@ const OwnerDashboard = () => {
   const [petSearch, setPetSearch] = useState("");
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
   
+  // --- LOADING/SAVING LOCK (PREVENTS DOUBLE CLICKS) ---
+  const [isSaving, setIsSaving] = useState(false);
+
   // --- CHAT EDIT STATE ---
   const [editingMessageId, setEditingMessageId] = useState(null);
 
@@ -48,12 +77,20 @@ const OwnerDashboard = () => {
   const [isEditingPet, setIsEditingPet] = useState(false);
   const [editingPetId, setEditingPetId] = useState(null);
 
+  // --- DELETE REQUEST MODAL STATE ---
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteData, setDeleteData] = useState({ id: null, name: "", reason: "" });
+
+  // --- CANCEL APPOINTMENT MODAL STATE ---
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelData, setCancelData] = useState({ id: null, reason: "" });
+
   // --- MEDICAL RECORD MODAL STATES ---
-  const [showMedicalModal, setShowMedicalModal] = useState(false); // For single appt
+  const [showMedicalModal, setShowMedicalModal] = useState(false); 
   const [selectedRecord, setSelectedRecord] = useState(null);
 
   // --- PET HISTORY MODAL STATES ---
-  const [showHistoryModal, setShowHistoryModal] = useState(false); // For full pet history
+  const [showHistoryModal, setShowHistoryModal] = useState(false); 
   const [historyPet, setHistoryPet] = useState(null);
 
   // --- RESCHEDULE STATE ---
@@ -148,24 +185,61 @@ const OwnerDashboard = () => {
       }
   };
 
-  const handleRequestDelete = async (petId, petName) => {
-      const reason = window.prompt(`Why do you want to delete ${petName}? (Required for Admin Approval)`);
-      if (reason) {
-          try {
-              await updateDoc(doc(db, "pets", petId), { deletionStatus: "Pending", deletionReason: reason });
-              alert("Deletion request sent to Admin for approval.");
-          } catch (error) { console.error(error); alert("Error sending request."); }
+  // --- NEW: OPEN DELETE MODAL ---
+  const openDeleteModal = (petId, petName) => {
+      setDeleteData({ id: petId, name: petName, reason: "" });
+      setShowDeleteModal(true);
+  };
+
+  // --- NEW: CONFIRM DELETE ACTION ---
+  const handleConfirmDelete = async (e) => {
+      e.preventDefault();
+      if (!deleteData.reason.trim()) return showToast("Please provide a reason.", "error");
+      
+      if (isSaving) return; // Lock
+      setIsSaving(true);
+
+      try {
+          await updateDoc(doc(db, "pets", deleteData.id), { 
+              deletionStatus: "Pending", 
+              deletionReason: deleteData.reason 
+          });
+          showToast("Deletion request sent to Admin for approval.");
+          setShowDeleteModal(false);
+      } catch (error) { 
+          console.error(error); 
+          showToast("Error sending request.", "error"); 
+      } finally {
+          setIsSaving(false); // Unlock
       }
   };
 
-  const handleCancelAppointment = async (apptId) => {
-      const reason = window.prompt("Please provide a reason for cancellation:");
-      if (reason) {
-          await updateDoc(doc(db, "appointments", apptId), { 
+  // --- NEW: OPEN CANCEL MODAL ---
+  const openCancelModal = (apptId) => {
+      setCancelData({ id: apptId, reason: "" });
+      setShowCancelModal(true);
+  };
+
+  // --- NEW: CONFIRM CANCEL ACTION ---
+  const handleConfirmCancel = async (e) => {
+      e.preventDefault();
+      if (!cancelData.reason.trim()) return showToast("Please provide a reason.", "error");
+
+      if (isSaving) return; // Lock
+      setIsSaving(true);
+
+      try {
+          await updateDoc(doc(db, "appointments", cancelData.id), { 
               status: "Cancelled",
-              cancellationReason: reason 
+              cancellationReason: cancelData.reason 
           });
-          alert("Appointment Cancelled.");
+          showToast("Appointment Cancelled.", "error");
+          setShowCancelModal(false);
+      } catch (error) {
+          console.error(error);
+          showToast("Error cancelling.", "error");
+      } finally {
+          setIsSaving(false); // Unlock
       }
   };
 
@@ -177,6 +251,45 @@ const OwnerDashboard = () => {
   const handleViewHistory = (pet) => {
       setHistoryPet(pet);
       setShowHistoryModal(true);
+  };
+
+  // --- PRINT FUNCTION ---
+  const handlePrintRecord = (record) => {
+      const printWindow = window.open('', '', 'height=800,width=800');
+      printWindow.document.write('<html><head><title>Medical Record - PawPals</title>');
+      printWindow.document.write('<style>body{font-family: sans-serif; padding: 20px;} .header{text-align:center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 20px;} .section{margin-bottom: 15px;} .label{font-weight: bold; color: #555;} .footer{margin-top: 50px; text-align: center; font-size: 12px; color: #888; border-top: 1px solid #ccc; padding-top: 10px;}</style>');
+      printWindow.document.write('</head><body>');
+      
+      printWindow.document.write('<div class="header">');
+      printWindow.document.write('<h1>Marawi Veterinary Clinic</h1>');
+      printWindow.document.write('<p>Marawi City, Lanao Del Sur | Phone: (123) 456-7890</p>');
+      printWindow.document.write('<h2>Medical Record & Prescription</h2>');
+      printWindow.document.write('</div>');
+
+      printWindow.document.write('<div class="section"><p><span class="label">Patient Name:</span> ' + record.petName + '</p>');
+      printWindow.document.write('<p><span class="label">Owner Name:</span> ' + (profileData.firstName + " " + profileData.lastName) + '</p></div>');
+      
+      printWindow.document.write('<hr/>');
+
+      printWindow.document.write('<div class="section"><p><span class="label">Date of Visit:</span> ' + record.date + '</p>');
+      printWindow.document.write('<p><span class="label">Reason for Visit:</span> ' + (record.reason || "N/A") + '</p></div>');
+
+      printWindow.document.write('<div class="section"><p><span class="label">Symptoms:</span> ' + (record.symptoms || "None") + '</p></div>');
+      
+      printWindow.document.write('<div class="section" style="background: #f0f8ff; padding: 10px; border-radius: 5px;">');
+      printWindow.document.write('<p><span class="label">Diagnosis:</span> ' + (record.diagnosis || "N/A") + '</p></div>');
+
+      printWindow.document.write('<div class="section" style="border: 1px solid #333; padding: 15px; margin-top: 20px;">');
+      printWindow.document.write('<h3 style="margin-top:0;">💊 Prescription (Rx)</h3>');
+      printWindow.document.write('<p>' + (record.medicine || "No medications prescribed.") + '</p></div>');
+
+      printWindow.document.write('<div class="section"><p><span class="label">Veterinarian Notes:</span> ' + (record.notes || "N/A") + '</p></div>');
+
+      printWindow.document.write('<div class="footer">This document is a computer-generated medical record from PawPals System.</div>');
+      
+      printWindow.document.write('</body></html>');
+      printWindow.document.close();
+      printWindow.print();
   };
 
   // --- RESCHEDULE LOGIC ---
@@ -191,41 +304,59 @@ const OwnerDashboard = () => {
 
   const handleRescheduleSubmit = async (e) => {
       e.preventDefault();
-      const now = new Date();
-      const selectedDateTime = new Date(rescheduleData.date);
-      const [hours, minutes] = rescheduleData.time.split(':');
-      selectedDateTime.setHours(hours, minutes, 0, 0);
+      
+      if (isSaving) return; // Lock
+      setIsSaving(true);
 
-      if (selectedDateTime.getDay() === 6) return alert("Sorry, the clinic is closed on Saturdays.");
-      if (selectedDateTime < now) return alert("Please select a future date and time.");
+      try {
+        const now = new Date();
+        const selectedDateTime = new Date(rescheduleData.date);
+        const [hours, minutes] = rescheduleData.time.split(':');
+        selectedDateTime.setHours(hours, minutes, 0, 0);
 
-      const formattedDate = rescheduleData.date.toDateString();
-      const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", rescheduleData.time));
-      const snapshot = await getDocs(qConflict);
-      const hasConflict = snapshot.docs.some(doc => {
-          if (doc.id === rescheduleData.id) return false;
-          return doc.data().status !== "Cancelled" && doc.data().status !== "Rejected";
-      });
+        if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
+        if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-      if (hasConflict) return alert(`CONFLICT: ${rescheduleData.time} is already booked.`);
+        const formattedDate = rescheduleData.date.toDateString();
+        const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", rescheduleData.time));
+        const snapshot = await getDocs(qConflict);
+        const hasConflict = snapshot.docs.some(doc => {
+            if (doc.id === rescheduleData.id) return false;
+            return doc.data().status !== "Cancelled" && doc.data().status !== "Rejected";
+        });
 
-      await updateDoc(doc(db, "appointments", rescheduleData.id), {
-          date: formattedDate,
-          time: rescheduleData.time,
-          status: "Pending",
-          isSeenByOwner: false
-      });
-      alert("Appointment Rescheduled! It is now Pending approval.");
-      setShowRescheduleModal(false);
+        if (hasConflict) throw new Error(`CONFLICT: ${rescheduleData.time} is already booked.`);
+
+        await updateDoc(doc(db, "appointments", rescheduleData.id), {
+            date: formattedDate,
+            time: rescheduleData.time,
+            status: "Pending",
+            isSeenByOwner: false
+        });
+        showToast("Appointment Rescheduled! It is now Pending approval.");
+        setShowRescheduleModal(false);
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        setIsSaving(false); // Unlock
+      }
   };
 
   const handleSaveProfile = async (e) => {
       e.preventDefault();
-      const userRef = doc(db, "users", user.uid);
-      await updateDoc(userRef, { firstName: profileData.firstName, lastName: profileData.lastName, phone: profileData.phone || "", address: profileData.address || "" });
-      alert("Profile Information Updated!"); 
-  };
-
+      if (isSaving) return;
+      setIsSaving(true);
+      try {
+        const userRef = doc(db, "users", user.uid);
+        await updateDoc(userRef, { firstName: profileData.firstName, lastName: profileData.lastName, phone: profileData.phone || "", address: profileData.address || "" });
+        showToast("Profile Information Updated!");
+     } catch (error) {
+          console.error(error);
+          showToast(error.message || "Error updating profile", "error");
+     } finally {
+           setIsSaving(false);
+        }
+    };
   const resetPetForm = () => {
     setPetName(""); setBreed(""); setOtherBreed(""); setAge(""); setAgeUnit("Years");
     setOtherSpecies(""); setSpecies("Dog"); setGender("Male"); setMedicalHistory(""); 
@@ -256,60 +387,81 @@ const OwnerDashboard = () => {
 
   const handlePetSubmit = async (e) => {
     e.preventDefault();
+    if (isSaving) return; // Lock
+
     const finalSpecies = species === "Other" ? otherSpecies : species;
-    if (!finalSpecies.trim()) return alert("Please specify the species.");
+    if (!finalSpecies.trim()) return showToast("Please specify the species.", "error");
 
     let finalBreed = breed;
     if (["Dog", "Cat"].includes(species)) {
         if (breed === "Other") finalBreed = otherBreed;
-        if (!finalBreed.trim()) return alert("Please specify the breed.");
+        if (!finalBreed.trim()) return showToast("Please specify the breed.", "error");
     } else {
         if (!finalBreed || !finalBreed.trim()) finalBreed = "N/A";
     }
 
-    const petData = { 
-        name: petName, species: finalSpecies, breed: finalBreed, 
-        age: Number(age), ageUnit, gender, medicalHistory, ownerId: user.uid, updatedAt: new Date()
-    };
+    setIsSaving(true); // Lock
 
-    if (isEditingPet && editingPetId) {
-        await updateDoc(doc(db, "pets", editingPetId), petData);
-        alert("Pet Updated Successfully!");
-    } else {
-        petData.createdAt = new Date();
-        await addDoc(collection(db, "pets"), petData);
-        alert("Pet Added Successfully!");
+    try {
+        const petData = { 
+            name: petName, species: finalSpecies, breed: finalBreed, 
+            age: Number(age), ageUnit, gender, medicalHistory, ownerId: user.uid, updatedAt: new Date()
+        };
+
+        if (isEditingPet && editingPetId) {
+            await updateDoc(doc(db, "pets", editingPetId), petData);
+            showToast("Pet Updated Successfully!");
+        } else {
+            petData.createdAt = new Date();
+            await addDoc(collection(db, "pets"), petData);
+            showToast("Pet Added Successfully!");
+        }
+        setShowPetModal(false); 
+        resetPetForm();
+    } catch (error) {
+        console.error(error);
+        showToast("Error saving pet.", "error");
+    } finally {
+        setIsSaving(false); // Unlock
     }
-    setShowPetModal(false); resetPetForm();
   };
   
   const handleBookAppointment = async (e) => {
       e.preventDefault();
-      if (!selectedPetId) return alert("Please add a pet first!");
+      if (!selectedPetId) return showToast("Please add a pet first!", "error");
       
-      const now = new Date();
-      const selectedDateTime = new Date(apptDate);
-      const [hours, minutes] = apptTime.split(':');
-      selectedDateTime.setHours(hours, minutes, 0, 0);
+      if (isSaving) return; // Lock
+      setIsSaving(true);
 
-      if (selectedDateTime.getDay() === 6) return alert("Sorry, the clinic is closed on Saturdays.");
-      if (selectedDateTime < now) return alert("Please select a future date and time.");
+      try {
+        const now = new Date();
+        const selectedDateTime = new Date(apptDate);
+        const [hours, minutes] = apptTime.split(':');
+        selectedDateTime.setHours(hours, minutes, 0, 0);
 
-      const pet = myPets.find(p => p.id === selectedPetId);
-      const formattedDate = apptDate.toDateString();
+        if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
+        if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-      const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", apptTime));
-      const snapshot = await getDocs(qConflict);
-      const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled" && doc.data().status !== "Rejected");
+        const pet = myPets.find(p => p.id === selectedPetId);
+        const formattedDate = apptDate.toDateString();
 
-      if (hasConflict) return alert(`CONFLICT: ${apptTime} is already booked.`);
+        const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", apptTime));
+        const snapshot = await getDocs(qConflict);
+        const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled" && doc.data().status !== "Rejected");
 
-      await addDoc(collection(db, "appointments"), {
-          ownerId: user.uid, petId: selectedPetId, petName: pet ? pet.name : "Unknown",
-          date: formattedDate, time: apptTime, reason: "Check-up", status: "Pending", createdAt: new Date(), isSeenByOwner: false
-      });
-      alert("Appointment Requested!");
-      setApptFilter("Pending");
+        if (hasConflict) throw new Error(`CONFLICT: ${apptTime} is already booked.`);
+
+        await addDoc(collection(db, "appointments"), {
+            ownerId: user.uid, petId: selectedPetId, petName: pet ? pet.name : "Unknown",
+            date: formattedDate, time: apptTime, reason: "Check-up", status: "Pending", createdAt: new Date(), isSeenByOwner: false
+        });
+        showToast("Appointment Requested!");
+        setApptFilter("Pending");
+      } catch (error) {
+        showToast(error.message, "error");
+      } finally {
+        setIsSaving(false); // Unlock
+      }
   };
 
   // --- UPDATED CHAT HANDLER ---
@@ -351,7 +503,7 @@ const OwnerDashboard = () => {
       if (shouldTriggerBot) {
           setTimeout(async () => {
               await addDoc(collection(db, "messages"), {
-                  text: "Thank you for contacting us! 🐾 Our staff has been notified and will reply shortly. In the meantime, feel free to browse our services.",
+                  text: "Thank you for contacting us! Our staff has been notified and will reply shortly.",
                   senderId: "AI_BOT", senderName: "PawPals Assistant", receiverId: user.uid, createdAt: new Date(), participants: [user.uid], type: "chat", read: true
               });
           }, 1000);
@@ -382,6 +534,9 @@ const OwnerDashboard = () => {
   return (
     <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
       
+      {/* Toast Notification Container */}
+      {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({...toast, show: false})} />}
+
       {/* --- Navbar (Fixed Height) --- */}
       <nav className="navbar" style={{ flexShrink: 0 }}>
         <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Owner</div>
@@ -451,7 +606,9 @@ const OwnerDashboard = () => {
                                 <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Address</label>
                                 <input type="text" value={profileData.address} onChange={(e) => setProfileData({...profileData, address: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
                             </div>
-                            <div style={{ gridColumn: "1 / -1", marginTop: "10px" }}><button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", width: "100%", padding: "12px" }}>💾 Save Owner Details</button></div>
+                            <div style={{ gridColumn: "1 / -1", marginTop: "10px" }}><button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", width: "100%", padding: "12px" }}>
+                                {isSaving ? "Saving..." : "💾 Save Owner Details"}
+                            </button></div>
                         </form>
                     </div>
                 </div>
@@ -475,9 +632,9 @@ const OwnerDashboard = () => {
                                         <div style={{marginLeft: "34px", marginTop: "5px", color: "red", fontWeight: "bold", fontSize: "12px"}}>Deletion Pending Approval</div>
                                     ) : (
                                         <div style={{position: "absolute", top: "15px", right: "15px", display:"flex", gap:"10px"}}>
-                                            <button onClick={() => handleViewHistory(pet)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="View Medical History">📜</button>
-                                            <button onClick={() => openEditPetModal(pet)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Edit Pet">✏️</button>
-                                            <button onClick={() => handleRequestDelete(pet.id, pet.name)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px", opacity: 0.6}} title="Request Delete">🗑️</button>
+                                            <button onClick={() => handleViewHistory(pet)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"12px"}} title="View Medical History">View</button>
+                                            <button onClick={() => openEditPetModal(pet)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"12px"}} title="Edit Pet">Edit</button>
+                                            <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"12px", opacity: 0.6, color: "red"}} title="Request Delete">Delete</button>
                                         </div>
                                     )}
                                 </div>
@@ -501,7 +658,9 @@ const OwnerDashboard = () => {
                             <div style={{margin:"10px 0"}}><Calendar onChange={setApptDate} value={apptDate} minDate={new Date()} className="custom-calendar" tileDisabled={({ date }) => date.getDay() === 6} /><div style={{fontSize:"11px", color:"red", marginTop:"5px", textAlign:"center"}}>* Clinic is closed on Saturdays</div></div>
                             <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Time:</label>
                             <input type="time" value={apptTime} onChange={e => setApptTime(e.target.value)} required style={{width:"100%", padding:"8px"}} />
-                            <button type="submit" className="action-btn" style={{background:"#2196F3", color:"white", width:"100%", marginTop:"10px", padding:"10px"}}>Request Schedule</button>
+                            <button type="submit" className="action-btn" style={{background:"#2196F3", color:"white", width:"100%", marginTop:"10px", padding:"10px"}} disabled={isSaving}>
+                                {isSaving ? "Requesting..." : "Request Schedule"}
+                            </button>
                         </form>
                     </div>
 
@@ -528,10 +687,11 @@ const OwnerDashboard = () => {
                                         {appt.status === "Cancelled" && appt.cancellationReason && (<div style={{fontSize:"12px", color:"red", marginTop:"5px"}}><strong>Cancellation Reason:</strong> {appt.cancellationReason}</div>)}
                                         {(appt.status === "Approved" || appt.status === "Pending") && (
                                             <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                                                <button onClick={() => handleCancelAppointment(appt.id)} style={{background:"#ffebee", color:"red", border:"1px solid red", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>✖ Cancel</button>
+                                                <button onClick={() => openCancelModal(appt.id)} style={{background:"#ffebee", color:"red", border:"1px solid red", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>✖ Cancel</button>
                                                 <button onClick={() => openRescheduleModal(appt)} style={{background:"#e3f2fd", color:"#1565C0", border:"1px solid #1565C0", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>📅 Reschedule</button>
                                             </div>
                                         )}
+                                        {/* --- UPDATED VIEW BUTTON FOR COMPLETED APPOINTMENTS --- */}
                                         {appt.status === "Done" && (
                                             <button onClick={() => handleViewMedicalRecord(appt)} style={{marginTop: "10px", background: "#E3F2FD", color: "#2196F3", border: "1px solid #2196F3", borderRadius: "20px", padding: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "bold", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "5px"}}>
                                                 📄 View Medical Record
@@ -594,7 +754,12 @@ const OwnerDashboard = () => {
                         <select value={gender} onChange={e => setGender(e.target.value)}><option>Male</option><option>Female</option></select>
                         <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Medical History (from other clinics):</label>
                         <textarea rows="3" placeholder="e.g. Vaccinated for Rabies last year..." value={medicalHistory} onChange={e => setMedicalHistory(e.target.value)} style={{width: "100%", padding:"8px", borderRadius:"5px", border:"1px solid #ccc", fontFamily:"inherit"}} />
-                        <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}><button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }}>{isEditingPet ? "Save Changes" : "Add Pet"}</button><button type="button" onClick={() => setShowPetModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }}>Cancel</button></div>
+                        <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                            <button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }} disabled={isSaving}>
+                                {isSaving ? "Saving..." : (isEditingPet ? "Save Changes" : "Add Pet")}
+                            </button>
+                            <button type="button" onClick={() => setShowPetModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }} disabled={isSaving}>Cancel</button>
+                        </div>
                     </form>
                 </div>
             </div>
@@ -621,8 +786,10 @@ const OwnerDashboard = () => {
                             <input type="time" value={rescheduleData.time} onChange={(e) => setRescheduleData({...rescheduleData, time: e.target.value})} required style={{width:"100%", padding:"8px", borderRadius:"5px", border:"1px solid #ccc"}} />
                         </div>
                         <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-                            <button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", flex: 1 }}>Confirm Reschedule</button>
-                            <button type="button" onClick={() => setShowRescheduleModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }}>Cancel</button>
+                            <button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", flex: 1 }} disabled={isSaving}>
+                                {isSaving ? "Updating..." : "Confirm Reschedule"}
+                            </button>
+                            <button type="button" onClick={() => setShowRescheduleModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }} disabled={isSaving}>Cancel</button>
                         </div>
                     </form>
                 </div>
@@ -656,6 +823,9 @@ const OwnerDashboard = () => {
                             <div style={{background: "#f9f9f9", padding: "8px", borderRadius: "5px", border: "1px solid #eee", fontStyle: "italic"}}>{selectedRecord.notes || "N/A"}</div>
                         </div>
                     </div>
+                    {/* PRINT BUTTON */}
+                    <button onClick={() => handlePrintRecord(selectedRecord)} className="action-btn" style={{ background: "#FF9800", color: "white", width: "100%", padding: "12px", marginBottom: "10px", display:"flex", justifyContent:"center", gap:"5px" }}>🖨️ Print Prescription</button>
+                    
                     <button onClick={() => setShowMedicalModal(false)} className="action-btn" style={{ background: "#2196F3", color: "white", width: "100%", padding: "12px" }}>Close Record</button>
                 </div>
             </div>
@@ -692,6 +862,8 @@ const OwnerDashboard = () => {
                                             <div><strong>💊 Medications Prescribed:</strong> {record.medicine || "N/A"}</div>
                                             <div><strong>📝 Notes:</strong> {record.notes || "N/A"}</div>
                                         </div>
+                                        {/* OPTIONAL: Add print button here for individual history items too */}
+                                        <button onClick={() => handlePrintRecord(record)} style={{marginTop:"10px", padding:"5px 10px", fontSize:"11px", cursor:"pointer", border:"1px solid #FF9800", background:"#fff3e0", color:"#e65100", borderRadius:"4px"}}>🖨️ Print this Record</button>
                                     </div>
                                 ))
                         )}
@@ -700,6 +872,62 @@ const OwnerDashboard = () => {
                     <div style={{marginTop: "15px", paddingTop: "15px", borderTop: "1px solid #eee"}}>
                         <button onClick={() => setShowHistoryModal(false)} className="action-btn" style={{ background: "#ccc", color: "#333", width: "100%", padding: "10px" }}>Close History</button>
                     </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- CUSTOM DELETE REASON MODAL --- */}
+        {showDeleteModal && (
+            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
+                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", color: "red" }}>⚠️ Request Deletion</h3>
+                    <p style={{fontSize: "14px", color: "#555"}}>Why do you want to delete <strong>{deleteData.name}</strong>?<br/>(This requires Admin approval)</p>
+                    <form onSubmit={handleConfirmDelete}>
+                        <textarea 
+                            rows="3" 
+                            placeholder="Reason..." 
+                            value={deleteData.reason} 
+                            onChange={e => setDeleteData({...deleteData, reason: e.target.value})} 
+                            required 
+                            style={{width: "100%", padding:"10px", borderRadius:"5px", border:"1px solid #ccc", marginBottom: "15px", fontFamily:"inherit"}} 
+                        />
+                        <div style={{ display: "flex", gap: "10px" }}>
+                            <button type="submit" className="action-btn" style={{ background: isSaving ? "#ccc" : "#d32f2f", color: "white", flex: 1 }} disabled={isSaving}>
+                                {isSaving ? "Sending..." : "Submit Request"}
+                            </button>
+                            <button type="button" onClick={() => setShowDeleteModal(false)} className="action-btn" style={{ background: "#eee", color: "#333", flex: 1 }} disabled={isSaving}>
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+
+        {/* --- CUSTOM CANCEL APPOINTMENT MODAL --- */}
+        {showCancelModal && (
+            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
+                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", color: "orange" }}>✖ Cancel Appointment</h3>
+                    <p style={{fontSize: "14px", color: "#555"}}>Please provide a reason for cancellation:</p>
+                    <form onSubmit={handleConfirmCancel}>
+                        <textarea 
+                            rows="3" 
+                            placeholder="Reason..." 
+                            value={cancelData.reason} 
+                            onChange={e => setCancelData({...cancelData, reason: e.target.value})} 
+                            required 
+                            style={{width: "100%", padding:"10px", borderRadius:"5px", border:"1px solid #ccc", marginBottom: "15px", fontFamily:"inherit"}} 
+                        />
+                        <div style={{ display: "flex", gap: "10px" }}>
+                            <button type="submit" className="action-btn" style={{ background: isSaving ? "#ccc" : "#d32f2f", color: "white", flex: 1 }} disabled={isSaving}>
+                                {isSaving ? "Cancelling..." : "Confirm Cancel"}
+                            </button>
+                            <button type="button" onClick={() => setShowCancelModal(false)} className="action-btn" style={{ background: "#eee", color: "#333", flex: 1 }} disabled={isSaving}>
+                                Go Back
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
         )}

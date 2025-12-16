@@ -23,7 +23,7 @@ const Home = () => {
           <button
             onClick={() => navigate('/login')}
             className="action-btn"
-            style={{ background: 'transparent', color: '#2196F3', border: '1px solid #2196F3' }}
+            style={{ background: 'transparent', color: '#2196F3', border: '2px solid #2196F3' }}
           >
             Login
           </button>

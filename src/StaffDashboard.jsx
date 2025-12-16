@@ -33,6 +33,24 @@ const DIAGNOSIS_OPTIONS = [
     "Diabetes Mellitus", "Heart Disease", "Kidney Disease", "Liver Disease"
 ];
 
+// --- TOAST COMPONENT ---
+const Toast = ({ message, type, onClose }) => {
+    if (!message) return null;
+    return (
+        <div style={{
+            position: "fixed", bottom: "20px", right: "20px", 
+            background: type === "error" ? "#f44336" : "#4CAF50",
+            color: "white", padding: "15px 25px", borderRadius: "8px", 
+            boxShadow: "0 4px 12px rgba(0,0,0,0.2)", zIndex: 3000, 
+            display: "flex", alignItems: "center", gap: "10px", animation: "slideIn 0.3s ease-out"
+        }}>
+            <span>{type === "error" ? "⚠️" : "✅"}</span>
+            <span style={{fontWeight: "500"}}>{message}</span>
+            <button onClick={onClose} style={{background:"none", border:"none", color:"white", marginLeft:"10px", cursor:"pointer", fontWeight:"bold"}}>✕</button>
+        </div>
+    );
+};
+
 const StaffDashboard = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("appointments"); 
@@ -41,6 +59,14 @@ const StaffDashboard = () => {
   // --- Notification States ---
   const [showNotifications, setShowNotifications] = useState(false);
   const [readNotifIds, setReadNotifIds] = useState([]); 
+
+  // Toast State
+  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+
+  const showToast = (message, type = "success") => {
+      setToast({ show: true, message, type });
+      setTimeout(() => setToast({ show: false, message: "", type: "success" }), 3000);
+  };
 
   // --- CALENDAR STATES ---
   const [apptViewMode, setApptViewMode] = useState("calendar"); 
@@ -62,8 +88,7 @@ const StaffDashboard = () => {
   // Consultation Form State
   const [showConsultModal, setShowConsultModal] = useState(false);
   const [selectedApptId, setSelectedApptId] = useState(null);
-  
-  // UPDATED: 'symptoms' is now an array for the checkboxes
+
   const [consultData, setConsultData] = useState({ 
       date: "",
       reason: "",
@@ -202,11 +227,11 @@ const StaffDashboard = () => {
                       createdAt: new Date(),
                       staffId: auth.currentUser.uid
                   });
-                  alert("Consultation Completed & Follow-up Scheduled!");
+                  showToast("Consultation Completed & Follow-up Scheduled!");
               } catch (error) { console.error(error); }
           }
       } else {
-          alert("Consultation Completed!");
+          showToast("Consultation Completed!");
       }
       setShowConsultModal(false);
   };
@@ -244,7 +269,8 @@ const StaffDashboard = () => {
       e.preventDefault();
       if (editingReportId) { await updateDoc(doc(db, "reports", editingReportId), { title: reportTitle, content: reportContent, lastEdited: new Date() }); setEditingReportId(null); } 
       else { await addDoc(collection(db, "reports"), { title: reportTitle, content: reportContent, authorId: auth.currentUser.uid, date: new Date().toISOString().split('T')[0] }); }
-      setReportTitle(""); setReportContent(""); alert("Report Saved!");
+      setReportTitle(""); setReportContent(""); 
+      showToast("Report Saved Successfully!");
   };
 
   const handleDeleteReport = async (id) => { if(window.confirm("Delete?")) await deleteDoc(doc(db, "reports", id)); };
@@ -254,7 +280,7 @@ const StaffDashboard = () => {
   const handleCreateWalkIn = async (e) => {
       e.preventDefault();
       const selectedDate = new Date(walkInData.date);
-      if (selectedDate.getDay() === 6) return alert("Cannot book on Saturdays. Clinic is closed.");
+      if (selectedDate.getDay() === 6) return showToast("Cannot book on Saturdays. Clinic is closed.", "error");
 
       try {
           await addDoc(collection(db, "appointments"), {
@@ -269,12 +295,12 @@ const StaffDashboard = () => {
               createdAt: new Date(),
               staffId: auth.currentUser.uid
           });
-          alert("Walk-in appointment created successfully!");
+          showToast("Walk-in appointment created successfully!");
           setShowWalkInModal(false);
           setWalkInData({ ownerId: "", petId: "", petName: "", date: "", time: "", reason: "" });
       } catch (err) {
           console.error(err);
-          alert("Error creating appointment.");
+          showToast("Error creating appointment.", "error");
       }
   };
 
@@ -433,6 +459,9 @@ const StaffDashboard = () => {
     // --- 1. FULL SCREEN CONTAINER (Locked to 100vh, No Scroll) ---
     <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
       
+      {/* Toast Container */}
+      {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({...toast, show: false})} />}
+
       {/* --- Navbar (Fixed Height) --- */}
       <nav className="navbar" style={{ flexShrink: 0 }}>
         <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Staff</div>
@@ -561,12 +590,12 @@ const StaffDashboard = () => {
                         <table style={{width: "100%", borderCollapse: "collapse"}}>
                             <thead>
                                 <tr style={{background:"#f1f1f1", textAlign:"left"}}>
-                                    <th style={{padding:"10px", position: "sticky", top: 0, background: "#f1f1f1", zIndex: 1}}>Pet Name</th>
-                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 1}}>Species</th>
-                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 1}}>Breed</th>
-                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 1}}>Owner Name</th>
-                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 1}}>Owner Phone</th>
-                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 1}}></th>
+                                    <th style={{padding:"10px", position: "sticky", top: 0, background: "#f1f1f1", zIndex: 10, borderBottom: "1px solid #ddd"}}>Pet Name</th>
+                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 10, borderBottom: "1px solid #ddd"}}>Species</th>
+                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 10, borderBottom: "1px solid #ddd"}}>Breed</th>
+                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 10, borderBottom: "1px solid #ddd"}}>Owner Name</th>
+                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 10, borderBottom: "1px solid #ddd"}}>Owner Phone</th>
+                                    <th style={{position: "sticky", top: 0, background: "#f1f1f1", zIndex: 10, borderBottom: "1px solid #ddd"}}></th>
                                 </tr>
                             </thead>
                             <tbody>
