@@ -7,16 +7,15 @@ import logoImg from './logo.png';
 
 // --- PROFESSIONAL SVG BAR CHART COMPONENT ---
 const SimpleBarChart = ({ data, title }) => {
-    // Adjusted dimensions for side-column fit
     const height = 300; 
-    const width = 400; // Narrower width for side layout
+    const width = 400; 
     const padding = 40;
     const chartWidth = width - (padding * 2);
     const chartHeight = height - (padding * 2);
     
     const maxValue = Math.max(...data.map(d => d.value), 1);
-    const barWidth = (chartWidth / data.length) * 0.6; 
     const gap = (chartWidth / data.length) * 0.4; 
+    const barWidth = (chartWidth / data.length) * 0.6;
 
     const [hoverIndex, setHoverIndex] = useState(null);
 
@@ -25,7 +24,6 @@ const SimpleBarChart = ({ data, title }) => {
             <h4 style={{ margin: "0 0 10px 0", color: "#333", borderBottom:"1px solid #f0f0f0", paddingBottom:"10px", fontSize: "16px", textAlign: "center" }}>📊 {title}</h4>
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", maxHeight: "100%" }}>
-                    {/* Grid Lines */}
                     {[0, 0.25, 0.5, 0.75, 1].map((tick, i) => {
                         const y = padding + chartHeight - (chartHeight * tick);
                         return (
@@ -35,7 +33,6 @@ const SimpleBarChart = ({ data, title }) => {
                             </g>
                         );
                     })}
-                    {/* Bars */}
                     {data.map((d, i) => {
                         const barH = (d.value / maxValue) * chartHeight;
                         const x = padding + (i * (chartWidth / data.length)) + (gap / 2);
@@ -77,8 +74,6 @@ const AdminDashboard = () => {
 
   // --- UI STATES ---
   const [activeView, setActiveView] = useState("accounts");
-  
-  // Filters
   const [userTab, setUserTab] = useState("owner");
   const [userSearch, setUserSearch] = useState("");
   const [petSearch, setPetSearch] = useState("");
@@ -86,14 +81,29 @@ const AdminDashboard = () => {
   
   // Records Tab
   const [recordTab, setRecordTab] = useState("pets");
-  const [recordPetSearch, setRecordPetSearch] = useState("");
-  const [recordStartDate, setRecordStartDate] = useState("");
-  const [recordEndDate, setRecordEndDate] = useState("");
-  const [recordStatus, setRecordStatus] = useState("Done");
+  const [recordPetSearch, setRecordPetSearch] = useState(""); 
+  const [recordStatus, setRecordStatus] = useState("All");
+  const [recordServiceFilter, setRecordServiceFilter] = useState("All");
 
   // Edit User
   const [editingUser, setEditingUser] = useState(null);
   const [editFormData, setEditFormData] = useState({ firstName: "", lastName: "" });
+
+  // View Record (For the View Box)
+  const [viewingRecord, setViewingRecord] = useState(null);
+
+  // --- NEW: PRINT STATES ---
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [selectedPetsForPrint, setSelectedPetsForPrint] = useState([]);
+
+  // --- CUSTOM MODAL STATE ---
+  const [modal, setModal] = useState({
+      show: false,
+      title: "",
+      message: "",
+      type: "confirm", 
+      onConfirm: null 
+  });
 
   // --- DATA FETCHING ---
   useEffect(() => {
@@ -107,38 +117,110 @@ const AdminDashboard = () => {
       return () => { unsubUsers(); unsubPets(); unsubAppts(); };
   }, []);
 
-  const handleLogout = async () => { await signOut(auth); navigate("/"); };
+  // --- ACTION HANDLERS ---
+  const closeModal = () => setModal({ ...modal, show: false });
+  const confirmAction = (title, message, action) => { setModal({ show: true, title, message, type: "confirm", onConfirm: action }); };
+  const showAlert = (title, message) => { setModal({ show: true, title, message, type: "alert", onConfirm: null }); };
 
-  const handleToggleUserStatus = async (userId, currentStatus) => {
+  const handleLogout = () => { 
+      confirmAction("Logout", "Are you sure you want to log out?", async () => { await signOut(auth); navigate("/"); });
+  };
+
+  const handleToggleUserStatus = (userId, currentStatus) => {
       const newStatus = !currentStatus; 
       const action = newStatus ? "Disable" : "Enable";
-      if(window.confirm(`Are you sure you want to ${action} this account?`)) {
+      confirmAction(`${action} Account`, `Are you sure you want to ${action} this account?`, async () => {
           await updateDoc(doc(db, "users", userId), { isDisabled: newStatus });
-      }
+          closeModal();
+      });
+  };
+
+  const handleManualArchive = (id) => { 
+      confirmAction("Archive Pet", "Are you sure you want to archive this pet?", async () => {
+          await updateDoc(doc(db, "pets", id), { isArchived: true });
+          closeModal();
+      });
+  };
+
+  const handleApproveDeletion = (pet) => { 
+      confirmAction("Approve Deletion", "This will permanently archive the pet. Continue?", async () => {
+          await updateDoc(doc(db, "pets", pet.id), { isArchived: true, deletionStatus: "Approved" });
+          closeModal();
+      });
+  };
+
+  const handleRejectDeletion = (petId) => { 
+      confirmAction("Reject Request", "This will restore the pet to the active list. Continue?", async () => {
+          await updateDoc(doc(db, "pets", petId), { isArchived: false, deletionStatus: null, deletionReason: null });
+          closeModal();
+      });
+  };
+
+  const handleRestorePet = (id) => { 
+      confirmAction("Restore Pet", "Restore this pet to the active list?", async () => {
+          await updateDoc(doc(db, "pets", id), { isArchived: false, deletionStatus: null, deletionReason: null });
+          closeModal();
+      });
   };
 
   const handleEditUser = (user) => { setEditingUser(user); setEditFormData({ firstName: user.firstName, lastName: user.lastName }); };
+  
   const handleSaveUser = async (e) => {
       e.preventDefault();
       if(editingUser) {
           await updateDoc(doc(db, "users", editingUser.id), { firstName: editFormData.firstName, lastName: editFormData.lastName });
           setEditingUser(null);
+          showAlert("Success", "User details updated successfully!");
       }
   };
+
   const handleSendResetEmail = async () => {
       if(editingUser && editingUser.email) {
-          try { await sendPasswordResetEmail(auth, editingUser.email); alert(`Password reset email sent to ${editingUser.email}`); } 
-          catch (error) { alert("Error sending email: " + error.message); }
+          try { 
+              await sendPasswordResetEmail(auth, editingUser.email); 
+              showAlert("Email Sent", `Password reset email sent to ${editingUser.email}`);
+          } catch (error) { showAlert("Error", "Error sending email: " + error.message); }
       }
   };
 
-  // Pet Actions
-  const handleManualArchive = async (id) => { if(window.confirm("Archive this pet?")) await updateDoc(doc(db, "pets", id), { isArchived: true }); };
-  const handleApproveDeletion = async (pet) => { if(window.confirm(`Approve deletion?`)) await updateDoc(doc(db, "pets", pet.id), { isArchived: true, deletionStatus: "Approved" }); };
-  const handleRejectDeletion = async (petId) => { if(window.confirm("Reject request?")) await updateDoc(doc(db, "pets", petId), { isArchived: false, deletionStatus: null, deletionReason: null }); };
-  const handleRestorePet = async (id) => { if(window.confirm("Restore pet?")) await updateDoc(doc(db, "pets", id), { isArchived: false, deletionStatus: null, deletionReason: null }); };
+  // --- PRINT LOGIC ---
+  const togglePetSelection = (petId) => {
+      setSelectedPetsForPrint(prev => 
+          prev.includes(petId) ? prev.filter(id => id !== petId) : [...prev, petId]
+      );
+  };
 
-  // --- FILTERS ---
+  const handleSelectAllForPrint = () => {
+      if (selectedPetsForPrint.length === filteredRecordData.length) {
+          setSelectedPetsForPrint([]); // Deselect all
+      } else {
+          setSelectedPetsForPrint(filteredRecordData.map(p => p.id)); // Select all
+      }
+  };
+
+  const handlePrintButtonClick = () => {
+      if (recordTab === "pets") {
+          // If in Pets tab, open the selection modal
+          setSelectedPetsForPrint([]); 
+          setShowPrintModal(true);
+      } else {
+          // If in Appointments tab, just print everything currently filtered
+          window.print();
+      }
+  };
+
+  const executePrint = () => {
+      setShowPrintModal(false);
+      // Wait a moment for modal to close, then trigger browser print
+      setTimeout(() => {
+          window.print();
+      }, 500);
+  };
+
+  // --- FILTERS & CALCULATIONS ---
+  
+  const uniqueServices = [...new Set(appointments.map(a => a.reason).filter(Boolean))].sort();
+
   const getFilteredUsers = () => {
       let filtered = users.filter(u => 
         (u.firstName?.toLowerCase().includes(userSearch.toLowerCase()) || 
@@ -148,54 +230,44 @@ const AdminDashboard = () => {
       return userTab === "disabled" ? filtered.filter(u => u.isDisabled === true) : filtered.filter(u => u.role === userTab && !u.isDisabled);
   };
 
-  const filteredPets = pets.filter(p => 
-      (p.name.toLowerCase().includes(petSearch.toLowerCase()) || 
-      users.find(u=>u.id===p.ownerId)?.firstName.toLowerCase().includes(petSearch.toLowerCase())) &&
-      (speciesFilter === "All" || p.species === speciesFilter)
-  );
+  const filteredPets = pets.filter(p => {
+    const matchesSearch = (p.name.toLowerCase().includes(petSearch.toLowerCase()) || 
+        users.find(u=>u.id===p.ownerId)?.firstName.toLowerCase().includes(petSearch.toLowerCase()));
+    let matchesSpecies = true;
+    if (speciesFilter === "All") matchesSpecies = true;
+    else if (speciesFilter === "Other") matchesSpecies = p.species !== "Dog" && p.species !== "Cat";
+    else matchesSpecies = p.species === speciesFilter;
+    return matchesSearch && matchesSpecies;
+  });
 
   const getFilteredRecords = () => {
-      let data = recordTab === "pets" ? pets : appointments;
-      if (recordTab === "appointments" && (recordStartDate || recordEndDate)) {
-           data = data.filter(item => {
-               const itemDate = new Date(item.date);
-               const start = recordStartDate ? new Date(recordStartDate) : new Date('1900-01-01');
-               const end = recordEndDate ? new Date(recordEndDate) : new Date('2100-01-01');
-               return itemDate >= start && itemDate <= end;
-           });
+      if (recordTab === "pets") {
+          const search = recordPetSearch.toLowerCase();
+          return pets.filter(p => p.name.toLowerCase().includes(search));
+      } else {
+          let data = appointments;
+          if (recordStatus !== "All") {
+              data = data.filter(a => a.status === recordStatus);
+          }
+          if (recordServiceFilter !== "All") {
+              data = data.filter(a => a.reason === recordServiceFilter);
+          }
+          return data;
       }
-      if (recordTab === "appointments" && recordStatus !== "All") data = data.filter(a => a.status === recordStatus);
-      const search = recordPetSearch.toLowerCase();
-      if (recordTab === "pets") return data.filter(p => p.name.toLowerCase().includes(search));
-      return data.filter(a => a.petName.toLowerCase().includes(search));
   };
-
   const filteredRecordData = getFilteredRecords();
 
-  // Static Graph Data
   const breedChartData = (() => {
       const counts = {};
-      const source = pets; 
-      source.forEach(p => { const b = p.breed || "Unknown"; counts[b] = (counts[b] || 0) + 1; });
-      return Object.entries(counts)
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 8) 
-          .map(([label, value]) => ({ label, value }));
+      pets.forEach(p => { const b = p.breed || "Unknown"; counts[b] = (counts[b] || 0) + 1; });
+      return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([label, value]) => ({ label, value }));
   })();
 
   const getTabStyle = (name) => ({
-      padding: "15px",
-      fontSize: "1.1rem",
-      cursor: "pointer",
-      border: "none",
-      borderRadius: "12px",
-      background: activeView === name ? "#2196F3" : "white",
-      color: activeView === name ? "white" : "#555",
+      padding: "15px", fontSize: "1.1rem", cursor: "pointer", border: "none", borderRadius: "12px",
+      background: activeView === name ? "#2196F3" : "white", color: activeView === name ? "white" : "#555",
       boxShadow: activeView === name ? "0 4px 10px rgba(33, 150, 243, 0.4)" : "0 2px 4px rgba(0,0,0,0.05)",
-      fontWeight: "bold",
-      transition: "all 0.2s",
-      width: "100%",
-      textAlign: "center"
+      fontWeight: "bold", transition: "all 0.2s", width: "100%", textAlign: "center"
   });
 
   return (
@@ -254,14 +326,19 @@ const AdminDashboard = () => {
                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
                     <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px", flexShrink: 0}}>
                         <h3>All Registered Pets</h3>
-                        <select value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value)} style={{padding:"8px", borderRadius:"5px"}}><option value="All">All Species</option><option value="Dog">Dogs</option><option value="Cat">Cats</option><option value="Other">Others</option></select>
+                        <select value={speciesFilter} onChange={e => setSpeciesFilter(e.target.value)} style={{padding:"8px", borderRadius:"5px", border:"1px solid #ddd"}}>
+                            <option value="All">All Species</option>
+                            <option value="Dog">Dogs</option>
+                            <option value="Cat">Cats</option>
+                            <option value="Other">Others</option>
+                        </select>
                     </div>
                     <input type="text" placeholder="🔍 Search Pet or Owner..." value={petSearch} onChange={e => setPetSearch(e.target.value)} style={{marginBottom:"15px", padding:"10px", borderRadius:"20px", border:"1px solid #ddd", width:"300px", flexShrink: 0}} />
                     <div style={{flex: 1, overflowY: "auto"}}>
                         <table style={{width: "100%", borderCollapse: "collapse"}}>
                             <thead><tr style={{background:"#f9f9f9", textAlign:"left"}}><th style={{padding:"10px"}}>Pet Name</th><th>Species</th><th>Breed</th><th>Owner</th><th>Actions</th></tr></thead>
                             <tbody>
-                                {filteredPets.map(p => {
+                                {filteredPets.length === 0 ? <tr><td colSpan="5" style={{textAlign:"center", padding:"20px", color:"#888"}}>No pets found matching filters.</td></tr> : filteredPets.map(p => {
                                     const owner = users.find(u => u.id === p.ownerId);
                                     return (
                                         <tr key={p.id} style={{borderBottom:"1px solid #eee"}}>
@@ -280,10 +357,7 @@ const AdminDashboard = () => {
             )}
 
             {activeView === "records" && (
-                // --- SIDE-BY-SIDE LAYOUT WRAPPER ---
                 <div style={{ display: "flex", gap: "20px", height: "100%", overflow: "hidden" }}>
-                    
-                    {/* LEFT COLUMN: GRAPH (Only shows when PETS selected) */}
                     {recordTab === "pets" && (
                         <div style={{ flex: "0 0 35%", minWidth: "300px", height: "100%" }}>
                              {breedChartData.length > 0 ? (
@@ -293,8 +367,6 @@ const AdminDashboard = () => {
                              )}
                         </div>
                     )}
-
-                    {/* RIGHT COLUMN: CONTROLS & TABLE */}
                     <div className="card" style={{ flex: 1, display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box", overflow: "hidden" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", flexShrink: 0 }}>
                             <h3>System Records</h3>
@@ -303,32 +375,60 @@ const AdminDashboard = () => {
                                 <button onClick={() => setRecordTab("appointments")} style={{ background: recordTab === "appointments" ? "white" : "transparent", border: "none", borderRadius: "18px", padding: "6px 20px", cursor: "pointer", fontWeight: "bold", boxShadow: recordTab === "appointments" ? "0 2px 4px rgba(0,0,0,0.1)" : "none" }}>Appointments</button>
                             </div>
                         </div>
-
-                        {/* Filters */}
                         <div style={{ display: "flex", gap: "10px", marginBottom: "15px", flexWrap: "wrap", padding: "10px", background: "#f9f9f9", borderRadius: "8px", flexShrink: 0 }}>
-                            <input type="text" placeholder={recordTab === "pets" ? "Search Pet..." : "Search Client/Pet..."} value={recordPetSearch} onChange={e => setRecordPetSearch(e.target.value)} style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc", flex: 1 }} />
-                            {recordTab === "appointments" && (
+                            
+                            {/* --- CONDITIONAL FILTERS --- */}
+                            
+                            {recordTab === "pets" ? (
+                                <input type="text" placeholder="Search Pet..." value={recordPetSearch} onChange={e => setRecordPetSearch(e.target.value)} style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc", flex: 1 }} />
+                            ) : (
+                                // --- APPOINTMENTS FILTERS ---
                                 <>
-                                    <select value={recordStatus} onChange={e => setRecordStatus(e.target.value)} style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }}>
-                                        <option value="All">All Statuses</option>
-                                        <option value="Done">Completed</option>
-                                        <option value="Approved">Approved</option>
-                                        <option value="Cancelled">Cancelled</option>
-                                    </select>
-                                    <input type="date" value={recordStartDate} onChange={e => setRecordStartDate(e.target.value)} style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }} />
-                                    <input type="date" value={recordEndDate} onChange={e => setRecordEndDate(e.target.value)} style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }} />
+                                    <div style={{display:"flex", alignItems:"center", gap:"5px", flex: 1}}>
+                                        <span style={{fontSize:"13px", fontWeight:"bold", color:"#555"}}>Service:</span>
+                                        <select 
+                                            value={recordServiceFilter} 
+                                            onChange={e => setRecordServiceFilter(e.target.value)} 
+                                            style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc", flex: 1, minWidth: "150px" }}
+                                        >
+                                            <option value="All">All Services</option>
+                                            {uniqueServices.map((service, i) => (
+                                                <option key={i} value={service}>{service}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                    
+                                    <div style={{display:"flex", alignItems:"center", gap:"5px"}}>
+                                        <span style={{fontSize:"13px", fontWeight:"bold", color:"#555"}}>Status:</span>
+                                        <select value={recordStatus} onChange={e => setRecordStatus(e.target.value)} style={{ padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }}>
+                                            <option value="All">All</option>
+                                            <option value="Done">Completed</option>
+                                            <option value="Approved">Approved</option>
+                                            <option value="Cancelled">Cancelled</option>
+                                        </select>
+                                    </div>
                                 </>
                             )}
-                            <button onClick={() => window.print()} style={{ background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "5px", cursor: "pointer" }}>🖨️ Print</button>
-                        </div>
+                            
+                            {/* --- PRINT BUTTON --- */}
+                            <button 
+                                onClick={handlePrintButtonClick} 
+                                style={{ background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "5px", cursor: "pointer" }}
+                            >
+                                🖨️ Print {recordTab === "pets" ? "Selection" : "Report"}
+                            </button>
 
-                        {/* Table */}
+                        </div>
                         <div style={{ flex: 1, overflowY: "auto" }}>
                             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
                                 <thead>
                                     <tr style={{ background: "#eee", textAlign: "left" }}>
                                         {recordTab === "pets" ? (
-                                            <><th>Pet Name</th><th>Species</th><th>Breed</th><th>Owner</th><th>Date</th></>
+                                            <>
+                                                <th style={{padding:"10px"}}>Pet Name</th>
+                                                <th>Species</th>
+                                                <th style={{textAlign:"center"}}>Actions</th>
+                                            </>
                                         ) : (
                                             <><th>Date</th><th>Pet</th><th>Service</th><th>Status</th><th>Notes</th></>
                                         )}
@@ -337,12 +437,21 @@ const AdminDashboard = () => {
                                 <tbody>
                                     {filteredRecordData.length === 0 ? <tr><td colSpan="5" style={{ textAlign: "center", padding: "20px" }}>No records found.</td></tr> : filteredRecordData.map(item => {
                                         if (recordTab === "pets") {
-                                            const owner = users.find(u => u.id === item.ownerId);
                                             return (
                                                 <tr key={item.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                                                    <td style={{ padding: "8px" }}>{item.name}</td><td>{item.species}</td><td>{item.breed}</td>
-                                                    <td>{owner ? `${owner.firstName} ${owner.lastName}` : "Unknown"}</td>
-                                                    <td>{item.createdAt?.toDate ? item.createdAt.toDate().toLocaleDateString() : "N/A"}</td>
+                                                    <td style={{ padding: "8px" }}>{item.name}</td>
+                                                    <td>{item.species}</td>
+                                                    <td style={{textAlign:"center"}}>
+                                                        <button 
+                                                            onClick={() => setViewingRecord(item)}
+                                                            style={{
+                                                                background: "#1976D2", color: "white", border: "none", 
+                                                                padding: "5px 10px", borderRadius: "4px", cursor: "pointer", fontSize: "11px"
+                                                            }}
+                                                        >
+                                                            👁️ View
+                                                        </button>
+                                                    </td>
                                                 </tr>
                                             );
                                         } else {
@@ -363,6 +472,7 @@ const AdminDashboard = () => {
                 </div>
             )}
 
+            {/* --- ARCHIVE VIEW --- */}
             {activeView === "archive" && (
                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
                     <h3>📦 Archived Pets & Deletion Requests</h3>
@@ -401,6 +511,257 @@ const AdminDashboard = () => {
             )}
         </div>
 
+        {/* --- 1. PRINT SELECTION MODAL (PETS) --- */}
+        {showPrintModal && (
+            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000 }}>
+                <div style={{ background: "white", padding: "20px", borderRadius: "12px", width: "400px", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 10px 25px rgba(0,0,0,0.3)" }}>
+                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", color: "#333" }}>🖨️ Select Pets to Print</h3>
+                    
+                    <div style={{ padding: "10px 0", borderBottom: "1px solid #eee", marginBottom: "10px" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: "10px", fontWeight: "bold", cursor: "pointer" }}>
+                            <input 
+                                type="checkbox" 
+                                checked={selectedPetsForPrint.length === filteredRecordData.length && filteredRecordData.length > 0}
+                                onChange={handleSelectAllForPrint}
+                            />
+                            Select All ({filteredRecordData.length})
+                        </label>
+                    </div>
+
+                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "8px" }}>
+                        {filteredRecordData.map(pet => (
+                            <label key={pet.id} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "8px", background: selectedPetsForPrint.includes(pet.id) ? "#e3f2fd" : "#f9f9f9", borderRadius: "6px", cursor: "pointer" }}>
+                                <input 
+                                    type="checkbox" 
+                                    checked={selectedPetsForPrint.includes(pet.id)}
+                                    onChange={() => togglePetSelection(pet.id)}
+                                />
+                                <span>
+                                    <strong>{pet.name}</strong> <span style={{fontSize:"12px", color:"#666"}}>({pet.species})</span>
+                                </span>
+                            </label>
+                        ))}
+                    </div>
+
+                    <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
+                        <button onClick={executePrint} disabled={selectedPetsForPrint.length === 0} style={{ flex: 1, background: selectedPetsForPrint.length === 0 ? "#ccc" : "#2196F3", color: "white", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>
+                            Print Selected ({selectedPetsForPrint.length})
+                        </button>
+                        <button onClick={() => setShowPrintModal(false)} style={{ flex: 1, background: "#eee", color: "#333", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* --- 2. HIDDEN PRINTABLE LAYOUT (Only visible on paper) --- */}
+        <div id="print-area">
+            <style>{`
+                @media print {
+                    body * { visibility: hidden; }
+                    #print-area, #print-area * { visibility: visible; }
+                    #print-area { position: absolute; left: 0; top: 0; width: 100%; }
+                    @page { margin: 20px; size: auto; }
+                    /* Styling for Pet Cards */
+                    .pet-record-page { page-break-inside: avoid; margin-bottom: 30px; border-bottom: 2px dashed #ccc; padding-bottom: 20px; }
+                    /* Styling for Appointment Table */
+                    .appointment-table-view table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 10px; }
+                    .appointment-table-view th, .appointment-table-view td { border: 1px solid #999; padding: 6px; text-align: left; vertical-align: top; }
+                    .appointment-table-view th { background: #eee; }
+                }
+                @media screen {
+                    #print-area { display: none; }
+                }
+            `}</style>
+
+            <div style={{ fontFamily: "Arial, sans-serif", color: "#333", maxWidth: "800px", margin: "0 auto" }}>
+                <h2 style={{textAlign: "center", borderBottom: "2px solid #333", paddingBottom: "10px", marginBottom: "20px" }}>
+                    PawPals Veterinary Records {recordTab === "appointments" && "- Appointment Log"}
+                </h2>
+                
+                {/* === A. PET PRINT VIEW === */}
+                {recordTab === "pets" && pets.filter(p => selectedPetsForPrint.includes(p.id)).map(pet => {
+                    const owner = users.find(u => u.id === pet.ownerId);
+                    const petHistory = appointments.filter(a => a.petName === pet.name && a.ownerId === pet.ownerId);
+
+                    return (
+                        <div key={pet.id} className="pet-record-page">
+                            {/* Header: Basic Info */}
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "15px", background: "#f5f5f5", padding: "15px", borderRadius: "8px", border: "1px solid #ddd" }}>
+                                <div style={{ width: "48%" }}>
+                                    <h3 style={{ marginTop: 0, color: "#1976D2", fontSize: "16px" }}>🐾 Pet Details</h3>
+                                    <p style={{margin: "5px 0"}}><strong>Name:</strong> {pet.name}</p>
+                                    <p style={{margin: "5px 0"}}><strong>Species:</strong> {pet.species} | <strong>Breed:</strong> {pet.breed || "N/A"}</p>
+                                </div>
+                                <div style={{ width: "48%" }}>
+                                    <h3 style={{ marginTop: 0, color: "#388E3C", fontSize: "16px" }}>👤 Owner Details</h3>
+                                    <p style={{margin: "5px 0"}}><strong>Name:</strong> {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown"}</p>
+                                    <p style={{margin: "5px 0"}}><strong>Contact:</strong> {owner?.phone || owner?.email || "N/A"}</p>
+                                </div>
+                            </div>
+
+                            {/* Table: Medical History */}
+                            <h4 style={{ borderBottom: "1px solid #000", paddingBottom: "5px", marginBottom: "10px" }}>📋 Medical History</h4>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px", border: "1px solid #ddd" }}>
+                                <thead>
+                                    <tr style={{ background: "#eee", textAlign: "left" }}>
+                                        <th style={{ border: "1px solid #999", padding: "8px" }}>Date</th>
+                                        <th style={{ border: "1px solid #999", padding: "8px" }}>Service</th>
+                                        <th style={{ border: "1px solid #999", padding: "8px" }}>Status</th>
+                                        <th style={{ border: "1px solid #999", padding: "8px" }}>Diagnosis / Notes</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {petHistory.length > 0 ? petHistory.map(appt => (
+                                        <tr key={appt.id}>
+                                            <td style={{ border: "1px solid #ccc", padding: "8px" }}>{appt.date}</td>
+                                            <td style={{ border: "1px solid #ccc", padding: "8px" }}>{appt.reason}</td>
+                                            <td style={{ border: "1px solid #ccc", padding: "8px" }}>{appt.status}</td>
+                                            <td style={{ border: "1px solid #ccc", padding: "8px" }}>{appt.diagnosis || appt.cancellationReason || "-"}</td>
+                                        </tr>
+                                    )) : (
+                                        <tr><td colSpan="4" style={{ textAlign: "center", padding: "10px", border: "1px solid #ccc" }}>No medical history found.</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    );
+                })}
+
+                {/* === B. APPOINTMENT PRINT VIEW (NEW) === */}
+                {recordTab === "appointments" && (
+                    <div className="appointment-table-view">
+                        <div style={{marginBottom: "15px", fontSize: "14px"}}>
+                            <strong>Report Filters:</strong> Status: {recordStatus} | Service: {recordServiceFilter}
+                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Date / Time</th>
+                                    <th>Pet Details</th>
+                                    <th>Owner Details</th>
+                                    <th>Service</th>
+                                    <th>Status</th>
+                                    <th>Diagnosis / Notes</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredRecordData.map(appt => {
+                                    // Resolve owner based on ID attached to appointment (if available) or search by name
+                                    const owner = users.find(u => u.id === appt.ownerId);
+                                    // Find pet details if possible
+                                    const pet = pets.find(p => p.id === appt.petId) || { species: "" };
+
+                                    return (
+                                        <tr key={appt.id}>
+                                            <td style={{whiteSpace:"nowrap"}}>{appt.date}</td>
+                                            <td>
+                                                <strong>{appt.petName}</strong><br/>
+                                                <span style={{fontSize:"10px", color:"#555"}}>{pet.species}</span>
+                                            </td>
+                                            <td>
+                                                {owner ? (
+                                                    <>
+                                                        {owner.firstName} {owner.lastName}<br/>
+                                                        <span style={{fontSize:"10px", color:"#555"}}>{owner.phone || owner.email}</span>
+                                                    </>
+                                                ) : "Unknown"}
+                                            </td>
+                                            <td>{appt.reason}</td>
+                                            <td>{appt.status}</td>
+                                            <td>{appt.diagnosis || appt.cancellationReason || "-"}</td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                        <div style={{marginTop: "10px", textAlign: "right", fontWeight: "bold", fontSize: "12px"}}>
+                            Total Records: {filteredRecordData.length}
+                        </div>
+                    </div>
+                )}
+                
+                <div style={{ textAlign: "center", marginTop: "20px", fontSize: "10px", color: "#666" }}>
+                    Generated by PawPals Admin System on {new Date().toLocaleDateString()}
+                </div>
+            </div>
+        </div>
+
+        {/* --- VIEW PET RECORD MODAL (EXISTING) --- */}
+        {viewingRecord && (
+             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                 <div style={{ background: "white", padding: "25px", borderRadius: "15px", width: "500px", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
+                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", borderBottom: "1px solid #eee", paddingBottom: "15px", marginBottom: "15px" }}>
+                        <h3 style={{ margin: 0, color: "#1976D2" }}>Pet & Owner Details</h3>
+                        <span onClick={() => setViewingRecord(null)} style={{cursor:"pointer", color:"#999", fontSize:"20px", fontWeight:"bold"}}>×</span>
+                     </div>
+                     
+                     <div style={{display:"grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "20px"}}>
+                         {/* LEFT COLUMN: PET INFO */}
+                         <div style={{ background: "#f9f9f9", padding: "10px", borderRadius: "8px" }}>
+                            <h5 style={{margin: "0 0 10px 0", color: "#666"}}>🐾 Pet Information</h5>
+                            <div style={{fontSize: "14px", marginBottom: "5px"}}><strong>Name:</strong> {viewingRecord.name}</div>
+                            <div style={{fontSize: "14px", marginBottom: "5px"}}><strong>Species:</strong> {viewingRecord.species}</div>
+                            <div style={{fontSize: "14px", marginBottom: "5px"}}><strong>Breed:</strong> {viewingRecord.breed || "Unknown"}</div>
+                         </div>
+                         
+                         {/* RIGHT COLUMN: OWNER INFO */}
+                         <div style={{ background: "#e3f2fd", padding: "10px", borderRadius: "8px" }}>
+                             <h5 style={{margin: "0 0 10px 0", color: "#1565C0"}}>👤 Owner Information</h5>
+                             {(() => {
+                                 const owner = users.find(u => u.id === viewingRecord.ownerId);
+                                 return owner ? (
+                                     <>
+                                        <div style={{fontSize: "14px", marginBottom: "5px"}}><strong>Name:</strong> {owner.firstName} {owner.lastName}</div>
+                                        <div style={{fontSize: "14px", marginBottom: "5px"}}><strong>Phone:</strong> {owner.phone || "N/A"}</div>
+                                        <div style={{fontSize: "14px", marginBottom: "5px"}}><strong>Address:</strong> {owner.address || "N/A"}</div>
+                                     </>
+                                 ) : <div style={{fontSize: "14px", color:"#999"}}>Owner not found</div>;
+                             })()}
+                         </div>
+                     </div>
+
+                     {/* MEDICAL HISTORY SECTION */}
+                     <h5 style={{margin: "0 0 10px 0", color: "#333", borderBottom:"1px solid #eee", paddingBottom:"5px"}}>📋 Medical History (Appointments)</h5>
+                     <div style={{ maxHeight: "200px", overflowY: "auto", border: "1px solid #eee", borderRadius: "4px" }}>
+                         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                            <thead style={{background: "#eee", position: "sticky", top: 0}}>
+                                <tr>
+                                    <th style={{padding: "8px", textAlign: "left"}}>Date</th>
+                                    <th style={{padding: "8px", textAlign: "left"}}>Service</th>
+                                    <th style={{padding: "8px", textAlign: "left"}}>Status</th>
+                                    <th style={{padding: "8px", textAlign: "left"}}>Notes/Diagnosis</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(() => {
+                                    const history = appointments.filter(a => a.petName === viewingRecord.name && a.ownerId === viewingRecord.ownerId);
+                                    if (history.length === 0) return <tr><td colSpan="4" style={{padding:"15px", textAlign:"center", color:"#999"}}>No medical history recorded.</td></tr>;
+                                    
+                                    return history.map(appt => (
+                                        <tr key={appt.id} style={{borderBottom: "1px solid #f0f0f0"}}>
+                                            <td style={{padding: "8px"}}>{appt.date}</td>
+                                            <td style={{padding: "8px"}}>{appt.reason}</td>
+                                            <td style={{padding: "8px"}}>
+                                                <span style={{ padding: "2px 6px", borderRadius: "4px", color: "white", fontSize: "10px", background: appt.status === "Done" ? "#2196F3" : (appt.status === "Cancelled" ? "red" : "green") }}>
+                                                    {appt.status}
+                                                </span>
+                                            </td>
+                                            <td style={{padding: "8px", color: "#555"}}>{appt.diagnosis || appt.cancellationReason || "-"}</td>
+                                        </tr>
+                                    ));
+                                })()}
+                            </tbody>
+                         </table>
+                     </div>
+
+                     <button onClick={() => setViewingRecord(null)} style={{marginTop:"20px", width:"100%", background:"#607D8B", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>Close Details</button>
+                 </div>
+             </div>
+         )}
+         
+         {/* --- EDIT USER MODAL (EXISTING) --- */}
         {editingUser && (
              <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
                  <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "400px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
@@ -415,6 +776,27 @@ const AdminDashboard = () => {
                  </div>
              </div>
          )}
+
+         {/* --- CONFIRMATION / ALERT MODAL (EXISTING) --- */}
+         {modal.show && (
+            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "350px", boxShadow: "0 10px 25px rgba(0,0,0,0.2)", textAlign: "center" }}>
+                    <h3 style={{ marginTop: 0, color: modal.type === "alert" ? "#2196F3" : "#333" }}>{modal.title}</h3>
+                    <p style={{ color: "#666", marginBottom: "25px", lineHeight: "1.5" }}>{modal.message}</p>
+                    <div style={{ display: "flex", gap: "10px", justifyContent: "center" }}>
+                        {modal.type === "confirm" ? (
+                            <>
+                                <button onClick={modal.onConfirm} style={{ background: "#d32f2f", color: "white", border: "none", padding: "10px 20px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", flex: 1 }}>Yes, Proceed</button>
+                                <button onClick={closeModal} style={{ background: "#eee", color: "#333", border: "none", padding: "10px 20px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", flex: 1 }}>Cancel</button>
+                            </>
+                        ) : (
+                            <button onClick={closeModal} style={{ background: "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", width: "100%" }}>OK</button>
+                        )}
+                    </div>
+                </div>
+            </div>
+         )}
+
       </main>
     </div>
   );

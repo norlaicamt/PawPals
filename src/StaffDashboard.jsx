@@ -142,6 +142,28 @@ const StaffDashboard = () => {
     return () => { unsubAppts(); unsubReports(); unsubChat(); };
   }, []);
 
+  // --- NEW: AUTO-MARK AS READ LOGIC ---
+  // When you open a chat with an owner, mark their messages as read
+  useEffect(() => {
+    if (activeTab === "messages" && selectedChatOwner) {
+        // Find unread messages from this owner
+        const unreadMsgs = allMessages.filter(
+            m => m.senderId === selectedChatOwner.id && !m.read && m.senderId !== "AI_BOT"
+        );
+        
+        // Update them in the database
+        if (unreadMsgs.length > 0) {
+            unreadMsgs.forEach(async (msg) => {
+                try {
+                    await updateDoc(doc(db, "messages", msg.id), { read: true });
+                } catch (error) {
+                    console.error("Error marking read:", error);
+                }
+            });
+        }
+    }
+  }, [activeTab, selectedChatOwner, allMessages]);
+
   // --- DATE NORMALIZER ---
   const normalizeDate = (dateInput) => {
       if (!dateInput) return "";
@@ -169,6 +191,9 @@ const StaffDashboard = () => {
   );
 
   const getUnreadCount = (ownerId) => allMessages.filter(m => m.senderId === ownerId && !m.read && m.senderId !== "AI_BOT").length;
+  
+  // --- NEW: TOTAL UNREAD COUNT FOR MAIN TAB ---
+  const totalUnreadMessages = allMessages.filter(m => m.senderId !== auth.currentUser?.uid && !m.read && m.senderId !== "AI_BOT").length;
 
   // --- ACTIONS ---
   const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
@@ -505,7 +530,17 @@ const StaffDashboard = () => {
         }}>
           <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>📅 Appointments</button>
           <button style={getTabStyle("records")} onClick={() => setActiveTab("records")}>📋 Pet Records</button>
-          <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}>💬 Messages</button>
+          
+          {/* UPDATED MESSAGE TAB WITH RED DOT */}
+          <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}>
+              💬 Messages 
+              {totalUnreadMessages > 0 && (
+                  <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px", marginLeft:"5px"}}>
+                      {totalUnreadMessages}
+                  </span>
+              )}
+          </button>
+          
           <button style={getTabStyle("reports")} onClick={() => setActiveTab("reports")}>📑 Reports</button>
         </div>
 

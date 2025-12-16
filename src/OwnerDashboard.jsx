@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { auth, db } from "./firebase";
-import { signOut } from "firebase/auth";
+import { signOut, updatePassword } from "firebase/auth";
 import { collection, addDoc, query, where, onSnapshot, orderBy, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import Calendar from 'react-calendar';
@@ -66,7 +66,7 @@ const OwnerDashboard = () => {
   const [petSearch, setPetSearch] = useState("");
   const [showNotifDropdown, setShowNotifDropdown] = useState(false);
   
-  // --- LOADING/SAVING LOCK (PREVENTS DOUBLE CLICKS) ---
+  // --- LOADING/SAVING LOCK ---
   const [isSaving, setIsSaving] = useState(false);
 
   // --- CHAT EDIT STATE ---
@@ -99,6 +99,7 @@ const OwnerDashboard = () => {
 
   // Profile Data
   const [profileData, setProfileData] = useState({ firstName: "", lastName: "", email: "", phone: "", address: "" });
+  const [newPassword, setNewPassword] = useState(""); 
   
   // --- PET FORM DATA ---
   const [petName, setPetName] = useState("");
@@ -145,9 +146,16 @@ const OwnerDashboard = () => {
             return dateB - dateA;
         });
         setMyAppointments(appts);
+        
+        // --- UPDATED: Include 'status' in the notification object for redirection ---
         const alerts = appts.filter(a => a.status !== "Pending").map(a => ({
-            id: a.id, type: "alert", text: `Your appointment for ${a.petName} on ${a.date} is ${a.status}.`, isSeenByOwner: a.isSeenByOwner 
+            id: a.id, 
+            type: "alert", 
+            text: `Your appointment for ${a.petName} on ${a.date} is ${a.status}.`, 
+            isSeenByOwner: a.isSeenByOwner,
+            status: a.status // Storing status here to use in click handler
         }));
+        
         setNotifications(alerts);
         setUnreadCount(alerts.filter(a => !a.isSeenByOwner).length);
       });
@@ -167,6 +175,22 @@ const OwnerDashboard = () => {
     if (activeTab === "chat") scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, activeTab]);
 
+  // --- MARK MESSAGES AS READ WHEN TAB IS ACTIVE ---
+  useEffect(() => {
+      if (activeTab === "chat" && chatMessages.length > 0) {
+          const unreadMsgs = chatMessages.filter(m => !m.read && m.senderId !== user.uid);
+          if (unreadMsgs.length > 0) {
+              unreadMsgs.forEach(async (msg) => {
+                  try {
+                      await updateDoc(doc(db, "messages", msg.id), { read: true });
+                  } catch (error) {
+                      console.error("Error marking read:", error);
+                  }
+              });
+          }
+      }
+  }, [activeTab, chatMessages, user.uid]);
+
   // Filters
   const filteredPets = myPets.filter(pet => pet.name.toLowerCase().includes(petSearch.toLowerCase()));
   
@@ -185,18 +209,29 @@ const OwnerDashboard = () => {
       }
   };
 
-  // --- NEW: OPEN DELETE MODAL ---
+  // --- NEW: HANDLE NOTIFICATION CLICK ---
+  const handleNotificationClick = (notif) => {
+      setShowNotifDropdown(false);
+      // If it's an appointment alert, go to Appointments tab
+      if (notif.type === "alert") {
+          setActiveTab("appointments");
+          // Automatically set the filter to match the notification (e.g., show "Approved" list)
+          if (notif.status) {
+              setApptFilter(notif.status); 
+          }
+      }
+  };
+
   const openDeleteModal = (petId, petName) => {
       setDeleteData({ id: petId, name: petName, reason: "" });
       setShowDeleteModal(true);
   };
 
-  // --- NEW: CONFIRM DELETE ACTION ---
   const handleConfirmDelete = async (e) => {
       e.preventDefault();
       if (!deleteData.reason.trim()) return showToast("Please provide a reason.", "error");
       
-      if (isSaving) return; // Lock
+      if (isSaving) return; 
       setIsSaving(true);
 
       try {
@@ -210,22 +245,20 @@ const OwnerDashboard = () => {
           console.error(error); 
           showToast("Error sending request.", "error"); 
       } finally {
-          setIsSaving(false); // Unlock
+          setIsSaving(false); 
       }
   };
 
-  // --- NEW: OPEN CANCEL MODAL ---
   const openCancelModal = (apptId) => {
       setCancelData({ id: apptId, reason: "" });
       setShowCancelModal(true);
   };
 
-  // --- NEW: CONFIRM CANCEL ACTION ---
   const handleConfirmCancel = async (e) => {
       e.preventDefault();
       if (!cancelData.reason.trim()) return showToast("Please provide a reason.", "error");
 
-      if (isSaving) return; // Lock
+      if (isSaving) return; 
       setIsSaving(true);
 
       try {
@@ -239,7 +272,7 @@ const OwnerDashboard = () => {
           console.error(error);
           showToast("Error cancelling.", "error");
       } finally {
-          setIsSaving(false); // Unlock
+          setIsSaving(false); 
       }
   };
 
@@ -252,8 +285,7 @@ const OwnerDashboard = () => {
       setHistoryPet(pet);
       setShowHistoryModal(true);
   };
-
-  // --- PRINT FUNCTION ---
+  
   const handlePrintRecord = (record) => {
       const printWindow = window.open('', '', 'height=800,width=800');
       printWindow.document.write('<html><head><title>Medical Record - PawPals</title>');
@@ -292,7 +324,6 @@ const OwnerDashboard = () => {
       printWindow.print();
   };
 
-  // --- RESCHEDULE LOGIC ---
   const openRescheduleModal = (appt) => {
       setRescheduleData({
           id: appt.id,
@@ -305,7 +336,7 @@ const OwnerDashboard = () => {
   const handleRescheduleSubmit = async (e) => {
       e.preventDefault();
       
-      if (isSaving) return; // Lock
+      if (isSaving) return; 
       setIsSaving(true);
 
       try {
@@ -338,7 +369,7 @@ const OwnerDashboard = () => {
       } catch (error) {
         showToast(error.message, "error");
       } finally {
-        setIsSaving(false); // Unlock
+        setIsSaving(false); 
       }
   };
 
@@ -348,15 +379,32 @@ const OwnerDashboard = () => {
       setIsSaving(true);
       try {
         const userRef = doc(db, "users", user.uid);
-        await updateDoc(userRef, { firstName: profileData.firstName, lastName: profileData.lastName, phone: profileData.phone || "", address: profileData.address || "" });
-        showToast("Profile Information Updated!");
+        await updateDoc(userRef, { 
+            firstName: profileData.firstName, 
+            lastName: profileData.lastName, 
+            phone: profileData.phone || "", 
+            address: profileData.address || "" 
+        });
+
+        if (newPassword.trim()) {
+            await updatePassword(user, newPassword);
+            setNewPassword(""); 
+            showToast("Profile & Password Updated Successfully!");
+        } else {
+            showToast("Profile Information Updated!");
+        }
      } catch (error) {
           console.error(error);
-          showToast(error.message || "Error updating profile", "error");
+          if (error.code === 'auth/requires-recent-login') {
+              showToast("Security: Please Log Out and Log In again to change password.", "error");
+          } else {
+              showToast(error.message || "Error updating profile", "error");
+          }
      } finally {
            setIsSaving(false);
         }
     };
+
   const resetPetForm = () => {
     setPetName(""); setBreed(""); setOtherBreed(""); setAge(""); setAgeUnit("Years");
     setOtherSpecies(""); setSpecies("Dog"); setGender("Male"); setMedicalHistory(""); 
@@ -387,7 +435,7 @@ const OwnerDashboard = () => {
 
   const handlePetSubmit = async (e) => {
     e.preventDefault();
-    if (isSaving) return; // Lock
+    if (isSaving) return; 
 
     const finalSpecies = species === "Other" ? otherSpecies : species;
     if (!finalSpecies.trim()) return showToast("Please specify the species.", "error");
@@ -400,7 +448,7 @@ const OwnerDashboard = () => {
         if (!finalBreed || !finalBreed.trim()) finalBreed = "N/A";
     }
 
-    setIsSaving(true); // Lock
+    setIsSaving(true); 
 
     try {
         const petData = { 
@@ -422,7 +470,7 @@ const OwnerDashboard = () => {
         console.error(error);
         showToast("Error saving pet.", "error");
     } finally {
-        setIsSaving(false); // Unlock
+        setIsSaving(false); 
     }
   };
   
@@ -430,7 +478,7 @@ const OwnerDashboard = () => {
       e.preventDefault();
       if (!selectedPetId) return showToast("Please add a pet first!", "error");
       
-      if (isSaving) return; // Lock
+      if (isSaving) return; 
       setIsSaving(true);
 
       try {
@@ -460,11 +508,10 @@ const OwnerDashboard = () => {
       } catch (error) {
         showToast(error.message, "error");
       } finally {
-        setIsSaving(false); // Unlock
+        setIsSaving(false); 
       }
   };
 
-  // --- UPDATED CHAT HANDLER ---
   const handleStartEdit = (msg) => { setEditingMessageId(msg.id); setChatInput(msg.text); };
   const handleCancelEdit = () => { setEditingMessageId(null); setChatInput(""); };
 
@@ -512,6 +559,7 @@ const OwnerDashboard = () => {
 
   const handleLogout = async () => { await signOut(auth); navigate("/"); };
 
+  // --- CALCULATE UNREAD MESSAGES FOR RED DOT ---
   const incomingMsgCount = chatMessages.filter(m => m.senderId !== user?.uid && !m.read).length;
   
   const getTabStyle = (name) => ({ 
@@ -534,10 +582,9 @@ const OwnerDashboard = () => {
   return (
     <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
       
-      {/* Toast Notification Container */}
       {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({...toast, show: false})} />}
 
-      {/* --- Navbar (Fixed Height) --- */}
+      {/* --- Navbar --- */}
       <nav className="navbar" style={{ flexShrink: 0 }}>
         <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Owner</div>
         <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
@@ -550,7 +597,22 @@ const OwnerDashboard = () => {
                         <h4 style={{ margin: "0 0 10px 0", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>Notifications</h4>
                         <div style={{ maxHeight: "300px", overflowY: "auto" }}>
                             {notifications.length === 0 ? <p style={{color:"#888"}}>No updates.</p> : notifications.map(n => (
-                                <div key={n.id} style={{padding:"10px", borderBottom:"1px solid #f0f0f0", fontSize:"14px", background: n.isSeenByOwner ? "white" : "#e3f2fd"}}>{n.text}</div>
+                                <div 
+                                    key={n.id} 
+                                    onClick={() => handleNotificationClick(n)} // --- CLICK HANDLER ---
+                                    style={{
+                                        padding:"10px", 
+                                        borderBottom:"1px solid #f0f0f0", 
+                                        fontSize:"14px", 
+                                        background: n.isSeenByOwner ? "white" : "#e3f2fd",
+                                        cursor: "pointer", // --- CURSOR POINTER ---
+                                        transition: "background 0.2s"
+                                    }}
+                                    onMouseOver={(e) => e.currentTarget.style.background = "#f5f5f5"}
+                                    onMouseOut={(e) => e.currentTarget.style.background = n.isSeenByOwner ? "white" : "#e3f2fd"}
+                                >
+                                    {n.text}
+                                </div>
                             ))}
                         </div>
                         <button onClick={() => setShowNotifDropdown(false)} style={{width:"100%", marginTop:"10px", padding:"8px", background:"#f5f5f5", border:"none", borderRadius:"6px"}}>Close</button>
@@ -562,7 +624,7 @@ const OwnerDashboard = () => {
         </div>
       </nav>
 
-      {/* --- 2. MAIN CONTENT AREA --- */}
+      {/* --- MAIN CONTENT AREA --- */}
       <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         
         {/* --- Tab Grid --- */}
@@ -578,7 +640,7 @@ const OwnerDashboard = () => {
           <button style={getTabStyle("chat")} onClick={() => setActiveTab("chat")}>💬 Message Clinic {incomingMsgCount > 0 && <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px"}}>{incomingMsgCount}</span>}</button>
         </div>
 
-        {/* --- 3. DYNAMIC CONTENT WRAPPER --- */}
+        {/* --- DYNAMIC CONTENT WRAPPER --- */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
             {activeTab === "profile" && (
@@ -602,6 +664,19 @@ const OwnerDashboard = () => {
                                 <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Phone Number</label>
                                 <input type="text" value={profileData.phone} onChange={(e) => setProfileData({...profileData, phone: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
                             </div>
+                            
+                            <div style={{ gridColumn: "1 / -1", background:"#e3f2fd", padding:"10px", borderRadius:"8px", border:"1px solid #90caf9" }}>
+                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#1565C0" }}>Change Password (Optional)</label>
+                                <input 
+                                    type="password" 
+                                    placeholder="Enter new password to change..."
+                                    value={newPassword} 
+                                    onChange={(e) => setNewPassword(e.target.value)} 
+                                    style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #90caf9", borderRadius:"5px"}} 
+                                />
+                                <div style={{fontSize:"11px", color:"#555", marginTop:"5px"}}>* Leave blank if you don't want to change it.</div>
+                            </div>
+
                             <div style={{ gridColumn: "1 / -1" }}>
                                 <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Address</label>
                                 <input type="text" value={profileData.address} onChange={(e) => setProfileData({...profileData, address: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
@@ -691,7 +766,6 @@ const OwnerDashboard = () => {
                                                 <button onClick={() => openRescheduleModal(appt)} style={{background:"#e3f2fd", color:"#1565C0", border:"1px solid #1565C0", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>📅 Reschedule</button>
                                             </div>
                                         )}
-                                        {/* --- UPDATED VIEW BUTTON FOR COMPLETED APPOINTMENTS --- */}
                                         {appt.status === "Done" && (
                                             <button onClick={() => handleViewMedicalRecord(appt)} style={{marginTop: "10px", background: "#E3F2FD", color: "#2196F3", border: "1px solid #2196F3", borderRadius: "20px", padding: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "bold", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "5px"}}>
                                                 📄 View Medical Record
@@ -796,7 +870,6 @@ const OwnerDashboard = () => {
             </div>
         )}
 
-        {/* --- SINGLE APPT MEDICAL RECORD MODAL --- */}
         {showMedicalModal && selectedRecord && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
                 <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "400px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
@@ -823,7 +896,6 @@ const OwnerDashboard = () => {
                             <div style={{background: "#f9f9f9", padding: "8px", borderRadius: "5px", border: "1px solid #eee", fontStyle: "italic"}}>{selectedRecord.notes || "N/A"}</div>
                         </div>
                     </div>
-                    {/* PRINT BUTTON */}
                     <button onClick={() => handlePrintRecord(selectedRecord)} className="action-btn" style={{ background: "#FF9800", color: "white", width: "100%", padding: "12px", marginBottom: "10px", display:"flex", justifyContent:"center", gap:"5px" }}>🖨️ Print Prescription</button>
                     
                     <button onClick={() => setShowMedicalModal(false)} className="action-btn" style={{ background: "#2196F3", color: "white", width: "100%", padding: "12px" }}>Close Record</button>
@@ -831,7 +903,6 @@ const OwnerDashboard = () => {
             </div>
         )}
 
-        {/* --- NEW PET HISTORY MODAL (LIST) --- */}
         {showHistoryModal && historyPet && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
                 <div style={{ background: "white", padding: "25px", borderRadius: "15px", width: "500px", maxHeight: "80vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
@@ -848,7 +919,7 @@ const OwnerDashboard = () => {
                         ) : (
                             myAppointments
                                 .filter(a => a.petId === historyPet.id && a.status === "Done")
-                                .sort((a, b) => new Date(b.date) - new Date(a.date)) // Sort descending by date
+                                .sort((a, b) => new Date(b.date) - new Date(a.date))
                                 .map(record => (
                                     <div key={record.id} style={{background: "#f9f9f9", borderRadius: "8px", padding: "15px", marginBottom: "15px", border: "1px solid #eee", boxShadow: "0 2px 4px rgba(0,0,0,0.02)"}}>
                                         <div style={{display: "flex", justifyContent: "space-between", marginBottom: "10px", borderBottom: "1px solid #e0e0e0", paddingBottom: "8px"}}>
@@ -862,7 +933,6 @@ const OwnerDashboard = () => {
                                             <div><strong>💊 Medications Prescribed:</strong> {record.medicine || "N/A"}</div>
                                             <div><strong>📝 Notes:</strong> {record.notes || "N/A"}</div>
                                         </div>
-                                        {/* OPTIONAL: Add print button here for individual history items too */}
                                         <button onClick={() => handlePrintRecord(record)} style={{marginTop:"10px", padding:"5px 10px", fontSize:"11px", cursor:"pointer", border:"1px solid #FF9800", background:"#fff3e0", color:"#e65100", borderRadius:"4px"}}>🖨️ Print this Record</button>
                                     </div>
                                 ))
@@ -876,7 +946,6 @@ const OwnerDashboard = () => {
             </div>
         )}
 
-        {/* --- CUSTOM DELETE REASON MODAL --- */}
         {showDeleteModal && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
                 <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
@@ -904,7 +973,6 @@ const OwnerDashboard = () => {
             </div>
         )}
 
-        {/* --- CUSTOM CANCEL APPOINTMENT MODAL --- */}
         {showCancelModal && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
                 <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
