@@ -5,7 +5,7 @@ import { collection, addDoc, query, where, onSnapshot, orderBy, doc, updateDoc, 
 import { useNavigate } from "react-router-dom";
 import Calendar from 'react-calendar';
 import 'react-calendar/dist/Calendar.css';
-import logoImg from './logo.png';
+import logoImg from "./assets/logo.png";
 
 // --- PREDEFINED BREED LISTS ---
 const DOG_BREEDS = [

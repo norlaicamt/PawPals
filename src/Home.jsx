@@ -1,7 +1,7 @@
 // src/Home.jsx
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import logoImg from './logo.png';
+import logoImg from "./assets/logo.png";
 
 const Home = () => {
   const navigate = useNavigate();

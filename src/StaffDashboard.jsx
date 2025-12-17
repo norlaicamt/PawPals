@@ -3,7 +3,7 @@ import { auth, db } from "./firebase";
 import { signOut } from "firebase/auth";
 import { collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc, getDocs, where, orderBy } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
-import logoImg from './logo.png'; 
+import logoImg from "./assets/logo.png"; 
 
 // --- CONSTANTS FOR SELECTIONS ---
 const VISIT_REASONS = [

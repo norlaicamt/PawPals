@@ -3,7 +3,7 @@ import { auth, db } from "./firebase";
 import { signOut, sendPasswordResetEmail } from "firebase/auth";
 import { collection, onSnapshot, doc, query, orderBy, updateDoc } from "firebase/firestore"; 
 import { useNavigate } from "react-router-dom";
-import logoImg from './logo.png'; 
+import logoImg from "./assets/logo.png"; 
 
 // --- PROFESSIONAL SVG BAR CHART COMPONENT ---
 const SimpleBarChart = ({ data, title }) => {

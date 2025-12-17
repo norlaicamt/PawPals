@@ -4,7 +4,7 @@ import { auth, db } from "./firebase";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import { useNavigate, Link } from "react-router-dom";
-import logoImg from './logo.png';
+import logoImg from "./assets/logo.png";
 
 
 const Signup = () => {
