@@ -9,7 +9,7 @@ import logoImg from "./assets/logo.png";
 const Login = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false); //
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(""); 
   const navigate = useNavigate();
@@ -60,8 +60,30 @@ const Login = () => {
 
   return (
     <div className="auth-container">
-      <div className="auth-card">
-        <div className="auth-header">
+      <div className="auth-card" style={{ position: "relative" }}>
+        
+        {/* ADDED BACK BUTTON */}
+        <button 
+          onClick={() => navigate("/")} 
+          style={{
+            position: "absolute",
+            top: "15px",
+            left: "15px",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "#666",
+            display: "flex",
+            alignItems: "center",
+            fontSize: "14px",
+            fontWeight: "bold"
+          }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: "5px"}}><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+          Back
+        </button>
+
+        <div className="auth-header" style={{ marginTop: "20px" }}>
           <img src={logoImg} alt="PawPals Logo" className="auth-logo-img" />
           <h2 style={{margin:0, color:"#333"}}>Welcome Back</h2>
           <p style={{margin:"5px 0 0", color:"#666"}}>PawPals Management System</p>
@@ -76,7 +98,6 @@ const Login = () => {
             className="auth-input" 
           />
           
-          {/* PASSWORD FIELD WITH TOGGLE */}
           <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <input 
               type={showPassword ? "text" : "password"} 
@@ -84,10 +105,10 @@ const Login = () => {
               onChange={(e) => setPassword(e.target.value)} 
               required 
               className="auth-input"
-              style={{ width: "100%", paddingRight: "40px" }} // Add padding for the icon
+              style={{ width: "100%", paddingRight: "40px" }}
             />
             <button
-              type="button" // Important: type="button" prevents form submission
+              type="button" 
               onClick={() => setShowPassword(!showPassword)}
               style={{
                 position: "absolute",
@@ -102,10 +123,8 @@ const Login = () => {
               }}
             >
               {showPassword ? (
-                // Eye Off Icon (SVG)
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
               ) : (
-                // Eye Icon (SVG)
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
               )}
             </button>

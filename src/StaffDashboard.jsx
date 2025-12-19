@@ -33,6 +33,10 @@ const DIAGNOSIS_OPTIONS = [
     "Diabetes Mellitus", "Heart Disease", "Kidney Disease", "Liver Disease"
 ];
 
+// --- ADDED: INVENTORY CONSTANTS ---
+const INVENTORY_CATEGORIES = ["Vaccines", "Medicines / Drugs", "Medical Supplies"];
+const INVENTORY_UNITS = ["pcs", "vials", "boxes", "bottles", "packs", "ml", "mg"];
+
 // --- TOAST COMPONENT ---
 const Toast = ({ message, type, onClose }) => {
     if (!message) return null;
@@ -116,6 +120,14 @@ const StaffDashboard = () => {
   const [reportSearch, setReportSearch] = useState(""); 
   const [editingReportId, setEditingReportId] = useState(null);
 
+  // --- ADDED: INVENTORY STATES ---
+  const [inventory, setInventory] = useState([]);
+  const [inventoryLogs, setInventoryLogs] = useState([]);
+  const [inventorySearch, setInventorySearch] = useState("");
+  const [showInventoryModal, setShowInventoryModal] = useState(false);
+  const [inventoryData, setInventoryData] = useState({
+      name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5});
+
   // --- DATA FETCHING ---
   useEffect(() => {
     const unsubAppts = onSnapshot(query(collection(db, "appointments"), orderBy("date", "desc")), (snap) => 
@@ -130,6 +142,15 @@ const StaffDashboard = () => {
         setAllMessages(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
     });
 
+    // --- ADDED: INVENTORY LISTENERS ---
+    const unsubInventory = onSnapshot(query(collection(db, "inventory"), orderBy("name", "asc")), (snap) => {
+        setInventory(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+    });
+
+    const unsubLogs = onSnapshot(query(collection(db, "inventoryLogs"), orderBy("timestamp", "desc")), (snap) => {
+        setInventoryLogs(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+    });
+
     const fetchBasicData = async () => {
         const petSnap = await getDocs(collection(db, "pets"));
         setAllPets(petSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
@@ -139,19 +160,16 @@ const StaffDashboard = () => {
     };
     fetchBasicData();
 
-    return () => { unsubAppts(); unsubReports(); unsubChat(); };
+    return () => { unsubAppts(); unsubReports(); unsubChat(); unsubInventory(); unsubLogs(); };
   }, []);
 
   // --- NEW: AUTO-MARK AS READ LOGIC ---
-  // When you open a chat with an owner, mark their messages as read
   useEffect(() => {
     if (activeTab === "messages" && selectedChatOwner) {
-        // Find unread messages from this owner
         const unreadMsgs = allMessages.filter(
             m => m.senderId === selectedChatOwner.id && !m.read && m.senderId !== "AI_BOT"
         );
         
-        // Update them in the database
         if (unreadMsgs.length > 0) {
             unreadMsgs.forEach(async (msg) => {
                 try {
@@ -195,15 +213,88 @@ const StaffDashboard = () => {
   // --- NEW: TOTAL UNREAD COUNT FOR MAIN TAB ---
   const totalUnreadMessages = allMessages.filter(m => m.senderId !== auth.currentUser?.uid && !m.read && m.senderId !== "AI_BOT").length;
 
+  // --- ADDED: INVENTORY HELPERS ---
+  const getStockStatus = (item) => {
+      if (item.quantity <= 0) return { label: "Out of Stock", color: "#f44336" };
+      if (item.quantity <= item.threshold) return { label: "Low Stock", color: "#ff9800" };
+      return { label: "In Stock", color: "#4CAF50" };
+  };
+
+  const printInventoryReport = () => {
+      const printWindow = window.open('', '_blank');
+      printWindow.document.write(`
+          <html>
+              <head><title>Inventory Report</title></head>
+              <body style="font-family: sans-serif; padding: 20px;">
+                  <h2>PawPals Clinic Inventory Report</h2>
+                  <p>Date: ${new Date().toLocaleString()}</p>
+                  <table border="1" style="width:100%; border-collapse: collapse; text-align: left;">
+                      <thead>
+                          <tr style="background: #f1f1f1;">
+                              <th style="padding: 10px;">Item Name</th>
+                              <th>Category</th>
+                              <th>Quantity</th>
+                              <th>Status</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          ${inventory.map(item => `
+                              <tr>
+                                  <td style="padding: 10px;">${item.name}</td>
+                                  <td>${item.category}</td>
+                                  <td>${item.quantity} ${item.unit}</td>
+                                  <td>${getStockStatus(item).label}</td>
+                              </tr>
+                          `).join('')}
+                      </tbody>
+                  </table>
+              </body>
+          </html>
+      `);
+      printWindow.document.close();
+      printWindow.print();
+  };
+
   // --- ACTIONS ---
   const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
   
+  // --- ADDED: INVENTORY ACTIONS ---
+  const handleSaveInventory = async (e) => {
+      e.preventDefault();
+      try {
+          await addDoc(collection(db, "inventory"), {
+              ...inventoryData,
+              createdAt: new Date()
+          });
+          showToast("Item added to inventory!");
+          setShowInventoryModal(false);
+          setInventoryData({ name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5 });
+      } catch (err) {
+          console.error(err);
+          showToast("Error adding inventory.", "error");
+      }
+  };
+
+  const handleUpdateStock = async (item, amount, reason) => {
+      const newQty = item.quantity + amount;
+      if (newQty < 0) return showToast("Cannot reduce below zero", "error");
+
+      await updateDoc(doc(db, "inventory", item.id), { quantity: newQty });
+      
+      await addDoc(collection(db, "inventoryLogs"), {
+          itemId: item.id,
+          itemName: item.name,
+          change: amount,
+          reason: reason,
+          timestamp: new Date()
+      });
+      showToast(`Stock updated for ${item.name}`);
+  };
+
   const openConsultModal = (apptId) => {
       setSelectedApptId(apptId);
       const appt = appointments.find(a => a.id === apptId);
-      
       const scheduledDate = normalizeDate(appt.date);
-      
       const existingSymptoms = appt.symptoms ? appt.symptoms.split(", ") : [];
 
       setConsultData({ 
@@ -481,13 +572,10 @@ const StaffDashboard = () => {
   useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
 
   return (
-    // --- 1. FULL SCREEN CONTAINER (Locked to 100vh, No Scroll) ---
     <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
       
-      {/* Toast Container */}
       {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({...toast, show: false})} />}
 
-      {/* --- Navbar (Fixed Height) --- */}
       <nav className="navbar" style={{ flexShrink: 0 }}>
         <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Staff</div>
         <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
@@ -517,13 +605,11 @@ const StaffDashboard = () => {
         </div>
       </nav>
 
-      {/* --- 2. MAIN CONTENT AREA (Flex Grow, No Scroll on parent) --- */}
       <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         
-        {/* --- Tab Grid (Fixed Height) --- */}
         <div style={{ 
             display: "grid", 
-            gridTemplateColumns: "repeat(4, 1fr)", 
+            gridTemplateColumns: "repeat(5, 1fr)", 
             gap: "20px", 
             marginBottom: "20px", 
             flexShrink: 0 
@@ -531,7 +617,6 @@ const StaffDashboard = () => {
           <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>📅 Appointments</button>
           <button style={getTabStyle("records")} onClick={() => setActiveTab("records")}>📋 Pet Records</button>
           
-          {/* UPDATED MESSAGE TAB WITH RED DOT */}
           <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}>
               💬 Messages 
               {totalUnreadMessages > 0 && (
@@ -541,10 +626,10 @@ const StaffDashboard = () => {
               )}
           </button>
           
+          <button style={getTabStyle("inventory")} onClick={() => setActiveTab("inventory")}>📦 Inventory</button>
           <button style={getTabStyle("reports")} onClick={() => setActiveTab("reports")}>📑 Reports</button>
         </div>
 
-        {/* --- 3. DYNAMIC CONTENT WRAPPER (Flex Grow, Scroll Internal) --- */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             
             {activeTab === "appointments" && (
@@ -574,7 +659,6 @@ const StaffDashboard = () => {
                                 </div>
                                 <button onClick={() => setCurrentDate(new Date())} style={{fontSize:"12px", background:"none", border:"1px solid #2196F3", color:"#2196F3", padding:"5px 10px", borderRadius:"5px"}}>Today</button>
                             </div>
-                            {/* Calendar Content Area - Scrollable */}
                             <div style={{flex: 1, overflowY: "auto", display: "flex", flexDirection: "column"}}>
                                 {calendarView === 'month' ? (<><div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", marginBottom: "5px" }}>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} style={{textAlign:"center", fontWeight:"bold", padding:"5px", color: d === 'Sat' ? 'red' : 'black'}}>{d}</div>)}</div>{renderMonthView()}</>) : (renderWeekView())}
                             </div>
@@ -691,6 +775,74 @@ const StaffDashboard = () => {
                 </div>
             )}
 
+            {/* --- ADDED: INVENTORY TAB --- */}
+            {activeTab === "inventory" && (
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", flexShrink: 0 }}>
+                        <h3>Clinic Inventory</h3>
+                        <div style={{ display: "flex", gap: "10px" }}>
+                            <button onClick={printInventoryReport} style={{ background: "#607d8b", color: "white", padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold" }}>Print Report</button>
+                            <button onClick={() => setShowInventoryModal(true)} style={{ background: "#4CAF50", color: "white", padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold" }}>+ Add Item</button>
+                        </div>
+                    </div>
+
+                    <input 
+                        type="text" 
+                        placeholder="Search items or categories..." 
+                        value={inventorySearch} 
+                        onChange={(e) => setInventorySearch(e.target.value)} 
+                        style={{ padding: "10px", marginBottom: "15px", borderRadius: "20px", border: "1px solid #ccc", width: "300px" }} 
+                    />
+
+                    <div style={{ flex: 1, overflowY: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                            <thead>
+                                <tr style={{ background: "#f1f1f1", textAlign: "left" }}>
+                                    <th style={{ padding: "12px" }}>Item Name</th>
+                                    <th>Category</th>
+                                    <th>Qty / Unit</th>
+                                    <th>Expiry</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {inventory.filter(i => i.name.toLowerCase().includes(inventorySearch.toLowerCase()) || i.category.toLowerCase().includes(inventorySearch.toLowerCase())).map(item => {
+                                    const status = getStockStatus(item);
+                                    return (
+                                        <tr key={item.id} style={{ borderBottom: "1px solid #eee" }}>
+                                            <td style={{ padding: "12px", fontWeight: "bold" }}>{item.name}</td>
+                                            <td><span style={{ fontSize: "12px", background: "#e0e0e0", padding: "2px 8px", borderRadius: "10px" }}>{item.category}</span></td>
+                                            <td>{item.quantity} {item.unit}</td>
+                                            <td style={{ color: item.expiryDate && new Date(item.expiryDate) < new Date() ? "red" : "inherit" }}>
+                                                {item.expiryDate || "N/A"}
+                                            </td>
+                                            <td><span style={{ color: status.color, fontWeight: "bold", fontSize: "12px" }}>● {status.label}</span></td>
+                                            <td>
+                                                <button onClick={() => handleUpdateStock(item, -1, "Manual adjustment")} style={{ marginRight: "5px", cursor: "pointer", borderRadius: "4px", border: "1px solid #ddd" }}>-1</button>
+                                                <button onClick={() => handleUpdateStock(item, 1, "Restock")} style={{ cursor: "pointer", borderRadius: "4px", border: "1px solid #ddd" }}>+1</button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    {/* Usage Logs Section */}
+                    <div style={{ marginTop: "20px", borderTop: "2px solid #eee", paddingTop: "15px", flexShrink: 0 }}>
+                        <h4 style={{ margin: "0 0 10px 0" }}>Recent Activity Logs</h4>
+                        <div style={{ maxHeight: "100px", overflowY: "auto", fontSize: "12px", color: "#666" }}>
+                            {inventoryLogs.slice(0, 10).map(log => (
+                                <div key={log.id} style={{ padding: "4px 0", borderBottom: "1px dashed #eee" }}>
+                                    <strong>{log.itemName}</strong>: {log.change > 0 ? `+${log.change}` : log.change} ({log.reason}) - <small>{log.timestamp?.toDate().toLocaleString()}</small>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {activeTab === "reports" && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "25px", alignItems: "start", height: "100%", overflow: "hidden" }}>
                     <div className="card"><h3>{editingReportId ? "Edit Report" : "New Report"}</h3><form onSubmit={handleSaveReport}><input type="text" placeholder="Title" value={reportTitle} onChange={e => setReportTitle(e.target.value)} required style={{width:"100%", padding:"10px", marginBottom:"10px", borderRadius:"5px", border:"1px solid #ccc"}} /><textarea placeholder="Content..." rows="8" value={reportContent} onChange={e => setReportContent(e.target.value)} required style={{width:"100%", padding:"10px", borderRadius:"5px", border:"1px solid #ccc", fontFamily:"inherit"}}></textarea><button type="submit" className="action-btn" style={{background:"#FF9800", color:"white", width:"100%", marginTop:"10px"}}>{editingReportId ? "Update" : "Create"}</button></form></div>
@@ -699,7 +851,55 @@ const StaffDashboard = () => {
             )}
         </div>
 
-        {/* --- MODALS (Fixed Position, Z-Index handled) --- */}
+        {/* --- ADDED: INVENTORY MODAL --- */}
+        {showInventoryModal && (
+            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2500 }}>
+                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "400px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
+                    <h3 style={{ marginTop: 0 }}>Add New Inventory Item</h3>
+                    <form onSubmit={handleSaveInventory}>
+                        <label style={{ fontSize: "12px", fontWeight: "bold" }}>Item Name</label>
+                        <input type="text" required style={{ width: "100%", padding: "8px", marginBottom: "10px" }} 
+                            onChange={e => setInventoryData({...inventoryData, name: e.target.value})} />
+                        
+                        <label style={{ fontSize: "12px", fontWeight: "bold" }}>Category</label>
+                        <select required style={{ width: "100%", padding: "8px", marginBottom: "10px" }} 
+                            onChange={e => setInventoryData({...inventoryData, category: e.target.value})}>
+                            <option value="">-- Select --</option>
+                            {INVENTORY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+
+                        <div style={{ display: "flex", gap: "10px" }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: "12px", fontWeight: "bold" }}>Quantity</label>
+                                <input type="number" required style={{ width: "100%", padding: "8px" }} 
+                                    onChange={e => setInventoryData({...inventoryData, quantity: parseInt(e.target.value)})} />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: "12px", fontWeight: "bold" }}>Unit</label>
+                                <select style={{ width: "100%", padding: "8px" }} 
+                                    onChange={e => setInventoryData({...inventoryData, unit: e.target.value})}>
+                                    {INVENTORY_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+                            </div>
+                        </div>
+
+                        <label style={{ fontSize: "12px", fontWeight: "bold", display: "block", marginTop: "10px" }}>Expiry Date (Optional)</label>
+                        <input type="date" style={{ width: "100%", padding: "8px", marginBottom: "10px" }} 
+                            onChange={e => setInventoryData({...inventoryData, expiryDate: e.target.value})} />
+
+                        <label style={{ fontSize: "12px", fontWeight: "bold" }}>Low Stock Alert Threshold</label>
+                        <input type="number" value={inventoryData.threshold} style={{ width: "100%", padding: "8px", marginBottom: "20px" }} 
+                            onChange={e => setInventoryData({...inventoryData, threshold: parseInt(e.target.value)})} />
+
+                        <div style={{ display: "flex", gap: "10px" }}>
+                            <button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }}>Save Item</button>
+                            <button type="button" onClick={() => setShowInventoryModal(false)} className="action-btn" style={{ background: "#eee", color: "black", flex: 1 }}>Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+
         {showConsultModal && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
                 <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "500px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)", maxHeight: "90vh", overflowY: "auto" }}>
@@ -707,11 +907,8 @@ const StaffDashboard = () => {
                     <form onSubmit={handleFinishConsultation}>
                          <div style={{marginBottom: "10px"}}>
                             <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>Date of Visit</label>
-                            {/* UPDATED: Automatically set to scheduled date */}
                             <input type="date" required value={consultData.date} onChange={(e) => setConsultData({ ...consultData, date: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }} />
                          </div>
-                         
-                         {/* REASON DROP-DOWN */}
                          <div style={{marginBottom: "10px"}}>
                             <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>Reason for Visit</label>
                             <select required value={consultData.reason} onChange={(e) => setConsultData({ ...consultData, reason: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }}>
@@ -719,8 +916,6 @@ const StaffDashboard = () => {
                                 {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
                             </select>
                          </div>
-                         
-                         {/* SYMPTOMS CHECKBOXES */}
                          <div style={{marginBottom: "10px"}}>
                             <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>Symptoms (Select all that apply)</label>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px", maxHeight: "120px", overflowY: "auto", border: "1px solid #eee", padding: "10px", borderRadius: "5px" }}>
@@ -736,8 +931,6 @@ const StaffDashboard = () => {
                                 ))}
                             </div>
                          </div>
-
-                         {/* DIAGNOSIS DROP-DOWN */}
                          <div style={{marginBottom: "10px"}}>
                             <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>Diagnosis</label>
                             <select required value={consultData.diagnosis} onChange={(e) => setConsultData({ ...consultData, diagnosis: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }}>
@@ -746,17 +939,14 @@ const StaffDashboard = () => {
                                 <option value="Other">Other (Specify in Notes)</option>
                             </select>
                          </div>
-
                          <div style={{marginBottom: "10px"}}>
                             <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>Medications Prescribed</label>
                             <input type="text" value={consultData.medicine} onChange={(e) => setConsultData({ ...consultData, medicine: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }} />
                          </div>
-                         
                          <div style={{marginBottom: "10px"}}>
                             <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>Notes</label>
                             <textarea value={consultData.notes} onChange={(e) => setConsultData({ ...consultData, notes: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }} rows="2" placeholder="Additional observations..." />
                          </div>
-
                          <div style={{marginTop:"15px", borderTop: "1px solid #eee", paddingTop: "10px"}}><label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px", color:"#2196F3"}}>Schedule Follow-up (Optional)</label><input type="date" min={new Date().toISOString().split('T')[0]} value={consultData.followUp} onChange={(e) => setConsultData({ ...consultData, followUp: e.target.value })} style={{ width: "100%", padding: "8px", borderRadius: "5px", border: "1px solid #ccc" }} /></div>
                          <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}><button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }}>Complete</button><button type="button" onClick={() => setShowConsultModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }}>Cancel</button></div>
                     </form>

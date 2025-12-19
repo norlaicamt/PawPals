@@ -10,7 +10,7 @@ import logoImg from "./assets/logo.png";
 const Signup = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false); //
+  const [showPassword, setShowPassword] = useState(false);
   const [fname, setFname] = useState("");
   const [lname, setLname] = useState("");
   const [loading, setLoading] = useState(false);
@@ -35,12 +35,37 @@ const Signup = () => {
 
   return (
     <div className="auth-container">
-      <div className="auth-card" style={{maxWidth: "500px"}}>
-        <div className="auth-header">
+      <div className="auth-card" style={{maxWidth: "500px", position: "relative"}}>
+        
+        {/* ADDED BACK BUTTON */}
+        <button 
+          onClick={() => navigate("/")} 
+          style={{
+            position: "absolute",
+            top: "15px",
+            left: "15px",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "#666",
+            display: "flex",
+            alignItems: "center",
+            fontSize: "14px",
+            fontWeight: "bold"
+          }}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: "5px"}}><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+          Back
+        </button>
+
+        <div className="auth-header" style={{marginTop: "20px"}}>
           <img src={logoImg} alt="PawPals Logo" className="auth-logo-img" />
           
-          <h2 style={{margin:0, color:"#333"}}>Join PawPals</h2>
-          <p style={{margin:"5px 0 0", color:"#666"}}>Register as a Pet Owner</p>
+          <h1 style={{margin:0, color:"#333", fontSize: "2rem"}}>PawPals</h1>
+          <h2 style={{margin:"10px 0 5px", color:"#444"}}>Join Our Community</h2>
+          <p style={{margin:"5px 0 20px", color:"#666", lineHeight: "1.5"}}>
+            Create an account to easily manage your pet's health records and book appointments online.
+          </p>
         </div>
         
         <form onSubmit={handleSignup} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
@@ -50,7 +75,6 @@ const Signup = () => {
           </div>
           <input type="email" placeholder="Email Address" onChange={(e) => setEmail(e.target.value)} required />
           
-          {/* PASSWORD FIELD WITH TOGGLE */}
           <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <input 
               type={showPassword ? "text" : "password"} 
@@ -60,7 +84,7 @@ const Signup = () => {
               style={{ width: "100%", paddingRight: "40px" }}
             />
             <button
-              type="button" // Important: prevents form submission
+              type="button" 
               onClick={() => setShowPassword(!showPassword)}
               style={{
                 position: "absolute",
@@ -94,7 +118,7 @@ const Signup = () => {
 
         <p style={{marginTop: "20px", fontSize: "14px", color: "#666"}}>
             Already have an account? <br/>
-            <Link to="/" className="auth-link" style={{marginTop: "5px"}}>Login here</Link>
+            <Link to="/login" className="auth-link" style={{marginTop: "5px"}}>Login here</Link>
         </p>
       </div>
     </div>
