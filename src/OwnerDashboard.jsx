@@ -711,7 +711,6 @@ const OwnerDashboard = () => {
                                     
                                     {pet.medicalHistory && <div style={{marginLeft: "34px", marginTop: "5px", color: "#555", fontSize: "12px", fontStyle:"italic"}}><strong>Prev. History:</strong> {pet.medicalHistory}</div>}
                                     
-                                    {/* --- BUTTONS MOVED BELOW (MOBILE FRIENDLY) --- */}
                                     <div style={{display: "flex", gap: "10px", marginTop: "15px", marginLeft: "34px", flexWrap: "wrap"}}>
                                         {pet.deletionStatus === 'Pending' ? (
                                             <div style={{color: "red", fontWeight: "bold", fontSize: "12px", width: "100%", padding: "5px", background: "#ffebee", borderRadius: "4px", textAlign: "center"}}>Deletion Pending Approval</div>
@@ -829,13 +828,12 @@ const OwnerDashboard = () => {
                 </div>
             )}
             
-            {/* --- CHAT TAB (FIXED VISIBILITY) --- */}
+            {/* --- CHAT TAB --- */}
             {activeTab === "chat" && (
                 <div style={{ flex: 1, overflow: "hidden", display: "flex", justifyContent: "center" }}>
                     <div className="card" style={{ height: "100%", width: "100%", maxWidth: "800px", display:"flex", flexDirection:"column", padding: "0", boxSizing: "border-box" }}>
                         <div style={{padding:"20px", borderBottom:"1px solid #eee", background:"#f8f9fa", borderRadius:"12px 12px 0 0", flexShrink: 0}}><h3 style={{margin:0}}>💬 Chat with Clinic Staff</h3></div>
                         
-                        {/* Added display:flex and flexDirection:column here to ensure messages stack correctly */}
                         <div className="chat-messages" style={{flex: 1, overflowY: "auto", padding: "25px", display: "flex", flexDirection: "column"}}>
                             {chatMessages.map(msg => {
                                  const dateObj = msg.createdAt?.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt);
@@ -845,7 +843,7 @@ const OwnerDashboard = () => {
                                  return (
                                      <div key={msg.id} style={{
                                         alignSelf: isMe ? "flex-end" : "flex-start",
-                                        background: isMe ? "#2196F3" : "#e0e0e0", // Blue for you, Grey for others
+                                        background: isMe ? "#2196F3" : "#e0e0e0", 
                                         color: isMe ? "white" : "black",
                                         padding: "10px 15px",
                                         borderRadius: "20px",
@@ -969,41 +967,41 @@ const OwnerDashboard = () => {
 
         {showHistoryModal && historyPet && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "25px", borderRadius: "15px", width: "500px", maxHeight: "80vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <div style={{borderBottom: "1px solid #eee", paddingBottom: "15px", marginBottom: "15px", display: "flex", justifyContent: "space-between", alignItems: "center"}}>
-                        <h3 style={{ margin: 0, color: "#2196F3" }}>📜 Medical History: {historyPet.name}</h3>
+                {/* ADJUSTED MODAL STYLE FOR MOBILE: Width 90%, MaxWidth 500px, Centered */}
+                <div style={{ background: "white", padding: "20px", borderRadius: "15px", width: "90%", maxWidth: "500px", maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
+                    <div style={{borderBottom: "1px solid #eee", paddingBottom: "10px", marginBottom: "10px", display: "flex", justifyContent: "space-between", alignItems: "center"}}>
+                        <h3 style={{ margin: 0, color: "#2196F3", fontSize: "18px" }}>📜 History: {historyPet.name}</h3>
                         <button onClick={() => setShowHistoryModal(false)} style={{background:"none", border:"none", fontSize:"20px", cursor:"pointer", color:"#999"}}>✖</button>
                     </div>
                     
-                    <div style={{ flex: 1, overflowY: "auto", paddingRight: "10px" }}>
+                    <div style={{ flex: 1, overflowY: "auto", paddingRight: "5px" }}>
                         {myAppointments.filter(a => a.petId === historyPet.id && a.status === "Done").length === 0 ? (
-                            <div style={{textAlign: "center", padding: "30px", color: "#999", fontStyle: "italic"}}>
-                                No completed check-up records found for {historyPet.name}.
+                            <div style={{textAlign: "center", padding: "30px", color: "#999", fontStyle: "italic", fontSize: "14px"}}>
+                                No completed check-up records found.
                             </div>
                         ) : (
                             myAppointments
                                 .filter(a => a.petId === historyPet.id && a.status === "Done")
                                 .sort((a, b) => new Date(b.date) - new Date(a.date))
                                 .map(record => (
-                                    <div key={record.id} style={{background: "#f9f9f9", borderRadius: "8px", padding: "15px", marginBottom: "15px", border: "1px solid #eee", boxShadow: "0 2px 4px rgba(0,0,0,0.02)"}}>
-                                        <div style={{display: "flex", justifyContent: "space-between", marginBottom: "10px", borderBottom: "1px solid #e0e0e0", paddingBottom: "8px"}}>
-                                            <span style={{fontWeight: "bold", color: "#444"}}>📅 {record.date}</span>
-                                            <span style={{fontSize: "12px", color: "#777"}}>{record.time}</span>
+                                    <div key={record.id} style={{background: "#f9f9f9", borderRadius: "8px", padding: "10px", marginBottom: "10px", border: "1px solid #eee", boxShadow: "0 2px 4px rgba(0,0,0,0.02)"}}>
+                                        <div style={{display: "flex", justifyContent: "space-between", marginBottom: "8px", borderBottom: "1px solid #e0e0e0", paddingBottom: "5px"}}>
+                                            <span style={{fontWeight: "bold", color: "#444", fontSize: "14px"}}>📅 {record.date}</span>
+                                            <span style={{fontSize: "11px", color: "#777"}}>{record.time}</span>
                                         </div>
-                                        <div style={{fontSize: "14px", color: "#555", display: "flex", flexDirection: "column", gap: "5px"}}>
-                                            <div><strong>Reason for Visit:</strong> {record.reason || "N/A"}</div>
-                                            <div><strong>Symptoms:</strong> {record.symptoms || "N/A"}</div>
-                                            <div><strong>🩺 Diagnosis:</strong> {record.diagnosis || "N/A"}</div>
-                                            <div><strong>💊 Medications Prescribed:</strong> {record.medicine || "N/A"}</div>
-                                            <div><strong>📝 Notes:</strong> {record.notes || "N/A"}</div>
+                                        {/* Reduced font size for details to fit mobile */}
+                                        <div style={{fontSize: "13px", color: "#555", display: "flex", flexDirection: "column", gap: "4px"}}>
+                                            <div><strong>Reason:</strong> {record.reason || "N/A"}</div>
+                                            <div><strong>Diagnosis:</strong> {record.diagnosis || "N/A"}</div>
+                                            <div><strong>Rx:</strong> {record.medicine || "N/A"}</div>
                                         </div>
-                                        <button onClick={() => handlePrintRecord(record)} style={{marginTop:"10px", padding:"5px 10px", fontSize:"11px", cursor:"pointer", border:"1px solid #FF9800", background:"#fff3e0", color:"#e65100", borderRadius:"4px"}}>🖨️ Print this Record</button>
+                                        <button onClick={() => handlePrintRecord(record)} style={{marginTop:"8px", padding:"4px 8px", fontSize:"11px", cursor:"pointer", border:"1px solid #FF9800", background:"#fff3e0", color:"#e65100", borderRadius:"4px", width: "100%"}}>🖨️ Print / View Details</button>
                                     </div>
                                 ))
                         )}
                     </div>
 
-                    <div style={{marginTop: "15px", paddingTop: "15px", borderTop: "1px solid #eee"}}>
+                    <div style={{marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #eee"}}>
                         <button onClick={() => setShowHistoryModal(false)} className="action-btn" style={{ background: "#ccc", color: "#333", width: "100%", padding: "10px" }}>Close History</button>
                     </div>
                 </div>
