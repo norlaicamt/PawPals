@@ -754,7 +754,7 @@ const OwnerDashboard = () => {
                                     color: apptSubTab === "list" ? "white" : "#666"
                                 }}
                             >
-                                📋 My List
+                                📋 My Appointments
                             </button>
                         </div>
                     )}
@@ -845,12 +845,14 @@ const OwnerDashboard = () => {
                                         alignSelf: isMe ? "flex-end" : "flex-start",
                                         background: isMe ? "#2196F3" : "#e0e0e0", 
                                         color: isMe ? "white" : "black",
-                                        padding: "10px 15px",
+                                        padding: "12px 18px", // More padding
                                         borderRadius: "20px",
-                                        maxWidth: "75%",
-                                        marginBottom: "10px",
+                                        maxWidth: "85%", // Increased slightly for mobile
+                                        marginBottom: "15px", // Increased space between messages so they don't cover each other
                                         position: "relative",
-                                        wordWrap: "break-word"
+                                        wordWrap: "break-word",
+                                        wordBreak: "break-word", // Ensures long words don't overflow
+                                        boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
                                      }}>
                                         {msg.text}
                                         {msg.isEdited && <span style={{fontSize:"10px", fontStyle:"italic", marginLeft:"5px", opacity: 0.7}}>(edited)</span>}
@@ -876,27 +878,33 @@ const OwnerDashboard = () => {
         {/* --- MODALS --- */}
         {showPetModal && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "400px", maxHeight:"90vh", overflowY:"auto", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px" }}>{isEditingPet ? "Edit Pet" : "Add New Pet"}</h3>
-                    <form onSubmit={handlePetSubmit} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                        <input type="text" placeholder="Pet Name" value={petName} onChange={e => setPetName(e.target.value)} required />
-                        <select value={species} onChange={e => { setSpecies(e.target.value); setBreed(""); setOtherBreed(""); }}><option>Dog</option><option>Cat</option><option>Other</option></select>
-                        {species === "Other" && <input type="text" placeholder="Please specify species..." value={otherSpecies} onChange={e => setOtherSpecies(e.target.value)} required style={{background: "#f9f9f9", border: "1px solid #2196F3"}} />}
-                        {["Dog", "Cat"].includes(species) ? (
-                            <select value={breed} onChange={e => setBreed(e.target.value)}><option value="">-- Select Breed --</option>{(species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => <option key={b} value={b}>{b}</option>)}</select>
-                        ) : (<input type="text" placeholder="Breed (Optional)" value={breed} onChange={e => setBreed(e.target.value)} />)}
-                        {breed === "Other" && <input type="text" placeholder="Specify Breed..." value={otherBreed} onChange={e => setOtherBreed(e.target.value)} required style={{background: "#f9f9f9", border: "1px solid #2196F3"}} />}
-                        <div style={{display:"flex", gap:"10px"}}><input type="number" placeholder="Age" value={age} onChange={e => setAge(e.target.value)} required style={{flex: 1}} /><select value={ageUnit} onChange={e => setAgeUnit(e.target.value)} style={{flex: 1}}><option value="Years">Years</option><option value="Months">Months</option></select></div>
-                        <select value={gender} onChange={e => setGender(e.target.value)}><option>Male</option><option>Female</option></select>
-                        <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Medical History (from other clinics):</label>
-                        <textarea rows="3" placeholder="e.g. Vaccinated for Rabies last year..." value={medicalHistory} onChange={e => setMedicalHistory(e.target.value)} style={{width: "100%", padding:"8px", borderRadius:"5px", border:"1px solid #ccc", fontFamily:"inherit"}} />
-                        <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-                            <button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }} disabled={isSaving}>
-                                {isSaving ? "Saving..." : (isEditingPet ? "Save Changes" : "Add Pet")}
-                            </button>
-                            <button type="button" onClick={() => setShowPetModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }} disabled={isSaving}>Cancel</button>
-                        </div>
-                    </form>
+                {/* FIXED: Applied "Medical History" style to this modal (width: 90%, maxWidth: 500px, overflow fixed) */}
+                <div style={{ background: "white", padding: "20px", borderRadius: "15px", width: "90%", maxWidth: "500px", maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
+                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", flexShrink: 0 }}>{isEditingPet ? "Edit Pet" : "Add New Pet"}</h3>
+                    
+                    <div style={{ flex: 1, overflowY: "auto", paddingRight: "5px" }}>
+                        <form onSubmit={handlePetSubmit} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                            <input type="text" placeholder="Pet Name" value={petName} onChange={e => setPetName(e.target.value)} required />
+                            <select value={species} onChange={e => { setSpecies(e.target.value); setBreed(""); setOtherBreed(""); }}><option>Dog</option><option>Cat</option><option>Other</option></select>
+                            {species === "Other" && <input type="text" placeholder="Please specify species..." value={otherSpecies} onChange={e => setOtherSpecies(e.target.value)} required style={{background: "#f9f9f9", border: "1px solid #2196F3"}} />}
+                            {["Dog", "Cat"].includes(species) ? (
+                                <select value={breed} onChange={e => setBreed(e.target.value)}><option value="">-- Select Breed --</option>{(species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => <option key={b} value={b}>{b}</option>)}</select>
+                            ) : (<input type="text" placeholder="Breed (Optional)" value={breed} onChange={e => setBreed(e.target.value)} />)}
+                            {breed === "Other" && <input type="text" placeholder="Specify Breed..." value={otherBreed} onChange={e => setOtherBreed(e.target.value)} required style={{background: "#f9f9f9", border: "1px solid #2196F3"}} />}
+                            <div style={{display:"flex", gap:"10px"}}><input type="number" placeholder="Age" value={age} onChange={e => setAge(e.target.value)} required style={{flex: 1}} /><select value={ageUnit} onChange={e => setAgeUnit(e.target.value)} style={{flex: 1}}><option value="Years">Years</option><option value="Months">Months</option></select></div>
+                            <select value={gender} onChange={e => setGender(e.target.value)}><option>Male</option><option>Female</option></select>
+                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Medical History (from other clinics):</label>
+                            <textarea rows="3" placeholder="e.g. Vaccinated for Rabies last year..." value={medicalHistory} onChange={e => setMedicalHistory(e.target.value)} style={{width: "100%", padding:"8px", borderRadius:"5px", border:"1px solid #ccc", fontFamily:"inherit"}} />
+                            
+                            {/* Actions moved to bottom of scroll area */}
+                            <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
+                                <button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }} disabled={isSaving}>
+                                    {isSaving ? "Saving..." : (isEditingPet ? "Save Changes" : "Add Pet")}
+                                </button>
+                                <button type="button" onClick={() => setShowPetModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }} disabled={isSaving}>Cancel</button>
+                            </div>
+                        </form>
+                    </div>
                 </div>
             </div>
         )}
@@ -967,7 +975,6 @@ const OwnerDashboard = () => {
 
         {showHistoryModal && historyPet && (
             <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                {/* ADJUSTED MODAL STYLE FOR MOBILE: Width 90%, MaxWidth 500px, Centered */}
                 <div style={{ background: "white", padding: "20px", borderRadius: "15px", width: "90%", maxWidth: "500px", maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
                     <div style={{borderBottom: "1px solid #eee", paddingBottom: "10px", marginBottom: "10px", display: "flex", justifyContent: "space-between", alignItems: "center"}}>
                         <h3 style={{ margin: 0, color: "#2196F3", fontSize: "18px" }}>📜 History: {historyPet.name}</h3>
@@ -989,7 +996,6 @@ const OwnerDashboard = () => {
                                             <span style={{fontWeight: "bold", color: "#444", fontSize: "14px"}}>📅 {record.date}</span>
                                             <span style={{fontSize: "11px", color: "#777"}}>{record.time}</span>
                                         </div>
-                                        {/* Reduced font size for details to fit mobile */}
                                         <div style={{fontSize: "13px", color: "#555", display: "flex", flexDirection: "column", gap: "4px"}}>
                                             <div><strong>Reason:</strong> {record.reason || "N/A"}</div>
                                             <div><strong>Diagnosis:</strong> {record.diagnosis || "N/A"}</div>
