@@ -1090,8 +1090,8 @@ const StaffDashboard = () => {
                                                      {/* MINUS BUTTON ADDED HERE */}
                                                      <button onClick={() => handleQuickUsage(item)} style={{background:"#ffebee", color:"red", border:"1px solid #ffcdd2", borderRadius:"4px", cursor:"pointer", padding:"2px 8px", fontWeight:"bold"}} title="Record Usage (Minus)">-</button>
                                                      
-                                                     <button onClick={() => handleOpenEditInventory(item)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Edit Item">✏️</button>
-                                                     <button onClick={() => handleDeleteInventory(item.id)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Delete Item">🗑️</button>
+                                                     <button onClick={() => handleOpenEditInventory(item)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Edit Item">Edit</button>
+                                                     <button onClick={() => handleDeleteInventory(item.id)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Delete Item">Delete</button>
                                                  </div>
                                              </td>
                                          </tr>

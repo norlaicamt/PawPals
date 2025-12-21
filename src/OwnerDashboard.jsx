@@ -46,6 +46,10 @@ const OwnerDashboard = () => {
   const [activeTab, setActiveTab] = useState("pets");
   const [apptFilter, setApptFilter] = useState("Pending");
 
+  // --- NEW: MOBILE SUB-TAB STATES ---
+  const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
+  const [apptSubTab, setApptSubTab] = useState("request"); // "request" or "list"
+
   // Toast State
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
 
@@ -115,6 +119,13 @@ const OwnerDashboard = () => {
   const [selectedPetId, setSelectedPetId] = useState("");
   const [apptDate, setApptDate] = useState(new Date());
   const [apptTime, setApptTime] = useState("08:00");
+
+  // --- NEW: LISTENER TO DETECT MOBILE SCREEN ---
+  useEffect(() => {
+      const handleResize = () => setIsMobile(window.innerWidth <= 768);
+      window.addEventListener("resize", handleResize);
+      return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   // --- DATA FETCHING ---
   useEffect(() => {
@@ -215,7 +226,8 @@ const OwnerDashboard = () => {
       // If it's an appointment alert, go to Appointments tab
       if (notif.type === "alert") {
           setActiveTab("appointments");
-          // Automatically set the filter to match the notification (e.g., show "Approved" list)
+          setApptSubTab("list"); // <--- ADD THIS LINE (Switches to List view on mobile)
+          // Automatically set the filter to match the notification
           if (notif.status) {
               setApptFilter(notif.status); 
           }
@@ -719,62 +731,101 @@ const OwnerDashboard = () => {
                 </div>
             )}
 
-            {/* --- APPOINTMENTS TAB --- */}
+            {/* --- APPOINTMENTS TAB (UPDATED FOR MOBILE SUB-TABS) --- */}
             {activeTab === "appointments" && (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", height: "100%", overflow: "hidden" }}>
+                <div style={{ height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
                     
-                    {/* LEFT SIDE: Request Appointment */}
-                    <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "20px", boxSizing: "border-box" }}>
-                        <h3 style={{marginTop:0}}>Request Appointment</h3>
-                        <form onSubmit={handleBookAppointment}>
-                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Pet:</label>
-                            <select value={selectedPetId} onChange={e => setSelectedPetId(e.target.value)} style={{width:"100%", padding:"8px", marginBottom:"10px"}}><option value="">-- Choose --</option>{myPets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555", marginTop:"10px", display:"block"}}>Select Date:</label>
-                            <div style={{margin:"10px 0"}}><Calendar onChange={setApptDate} value={apptDate} minDate={new Date()} className="custom-calendar" tileDisabled={({ date }) => date.getDay() === 6} /><div style={{fontSize:"11px", color:"red", marginTop:"5px", textAlign:"center"}}>* Clinic is closed on Saturdays</div></div>
-                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Time:</label>
-                            <input type="time" value={apptTime} onChange={e => setApptTime(e.target.value)} required style={{width:"100%", padding:"8px"}} />
-                            <button type="submit" className="action-btn" style={{background:"#2196F3", color:"white", width:"100%", marginTop:"10px", padding:"10px"}} disabled={isSaving}>
-                                {isSaving ? "Requesting..." : "Request Schedule"}
+                    {/* MOBILE TOGGLE BUTTONS (Only visible on mobile) */}
+                    {isMobile && (
+                        <div style={{display: "flex", marginBottom: "15px", background: "white", padding: "5px", borderRadius: "12px", boxShadow: "0 2px 5px rgba(0,0,0,0.05)", flexShrink: 0}}>
+                            <button 
+                                onClick={() => setApptSubTab("request")}
+                                style={{
+                                    flex: 1, padding: "10px", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer", transition: "all 0.2s",
+                                    background: apptSubTab === "request" ? "#2196F3" : "transparent",
+                                    color: apptSubTab === "request" ? "white" : "#666"
+                                }}
+                            >
+                                ➕ Request
                             </button>
-                        </form>
-                    </div>
+                            <button 
+                                onClick={() => setApptSubTab("list")}
+                                style={{
+                                    flex: 1, padding: "10px", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer", transition: "all 0.2s",
+                                    background: apptSubTab === "list" ? "#2196F3" : "transparent",
+                                    color: apptSubTab === "list" ? "white" : "#666"
+                                }}
+                            >
+                                📋 My List
+                            </button>
+                        </div>
+                    )}
 
-                    {/* RIGHT SIDE: My Appointments */}
-                    <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", padding: "20px", boxSizing: "border-box" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", borderBottom: "1px solid #eee", paddingBottom: "10px", flexShrink: 0 }}>
-                            <h4 style={{margin:0}}>My Appointments</h4>
-                            <select value={apptFilter} onChange={(e) => setApptFilter(e.target.value)} style={{padding: "8px", borderRadius: "5px", border: "1px solid #ccc", outline: "none", cursor: "pointer"}}>
-                                <option value="Pending">Pending</option>
-                                <option value="Approved">Approved</option>
-                                <option value="Done">Completed</option>
-                                <option value="Cancelled">Cancelled</option>
-                            </select>
-                        </div>
-                        <div style={{ flex: 1, overflowY: "auto" }}>
-                            {filteredAppointments.length === 0 ? <p style={{color: "#999", textAlign: "center", padding: "20px"}}>No {apptFilter} appointments.</p> : (
-                                filteredAppointments.map(appt => (
-                                    <div key={appt.id} style={{padding: "15px", marginBottom: "10px", border: "1px solid #eee", borderRadius: "8px", background: "#f9f9f9", borderLeft: appt.status === "Done" ? "5px solid #2196F3" : (appt.status === "Approved" ? "5px solid green" : (appt.status === "Cancelled" ? "5px solid red" : "5px solid orange")), position: "relative"}}>
-                                        <div style={{ display: "flex", justifyContent: "space-between" }}><strong>{appt.petName}</strong><span style={{ fontSize: "12px", color: "#666" }}>{appt.date} @ {appt.time}</span></div>
-                                        <div style={{ fontSize: "14px", color: "#555", margin: "5px 0" }}>
-                                            <span style={{fontWeight:"bold", fontSize:"12px", padding:"2px 8px", borderRadius:"10px", color:"white", background: appt.status === "Done" ? "#2196F3" : (appt.status === "Approved" ? "green" : (appt.status === "Cancelled" ? "red" : "orange"))}}>{appt.status}</span>
-                                            <span style={{marginLeft:"10px"}}>Reason: {appt.reason}</span>
-                                        </div>
-                                        {appt.status === "Cancelled" && appt.cancellationReason && (<div style={{fontSize:"12px", color:"red", marginTop:"5px"}}><strong>Cancellation Reason:</strong> {appt.cancellationReason}</div>)}
-                                        {(appt.status === "Approved" || appt.status === "Pending") && (
-                                            <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                                                <button onClick={() => openCancelModal(appt.id)} style={{background:"#ffebee", color:"red", border:"1px solid red", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>✖ Cancel</button>
-                                                <button onClick={() => openRescheduleModal(appt)} style={{background:"#e3f2fd", color:"#1565C0", border:"1px solid #1565C0", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>📅 Reschedule</button>
+                    <div style={{ 
+                        display: isMobile ? "block" : "grid", 
+                        gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", 
+                        gap: "20px", 
+                        height: "100%", 
+                        overflow: "hidden" 
+                    }}>
+                        
+                        {/* LEFT SIDE: Request Appointment (Show if Desktop OR (Mobile & Tab is Request)) */}
+                        {(!isMobile || apptSubTab === "request") && (
+                            <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "20px", boxSizing: "border-box" }}>
+                                <h3 style={{marginTop:0}}>Request Appointment</h3>
+                                <form onSubmit={handleBookAppointment}>
+                                    <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Pet:</label>
+                                    <select value={selectedPetId} onChange={e => setSelectedPetId(e.target.value)} style={{width:"100%", padding:"8px", marginBottom:"10px"}}><option value="">-- Choose --</option>{myPets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+                                    <label style={{fontSize:"12px", fontWeight:"bold", color:"#555", marginTop:"10px", display:"block"}}>Select Date:</label>
+                                    <div style={{margin:"10px 0"}}><Calendar onChange={setApptDate} value={apptDate} minDate={new Date()} className="custom-calendar" tileDisabled={({ date }) => date.getDay() === 6} /><div style={{fontSize:"11px", color:"red", marginTop:"5px", textAlign:"center"}}>* Clinic is closed on Saturdays</div></div>
+                                    <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Time:</label>
+                                    <input type="time" value={apptTime} onChange={e => setApptTime(e.target.value)} required style={{width:"100%", padding:"8px"}} />
+                                    <button type="submit" className="action-btn" style={{background:"#2196F3", color:"white", width:"100%", marginTop:"10px", padding:"10px"}} disabled={isSaving}>
+                                        {isSaving ? "Requesting..." : "Request Schedule"}
+                                    </button>
+                                </form>
+                            </div>
+                        )}
+
+                        {/* RIGHT SIDE: My Appointments (Show if Desktop OR (Mobile & Tab is List)) */}
+                        {(!isMobile || apptSubTab === "list") && (
+                            <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", padding: "20px", boxSizing: "border-box" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", borderBottom: "1px solid #eee", paddingBottom: "10px", flexShrink: 0 }}>
+                                    <h4 style={{margin:0}}>My Appointments</h4>
+                                    <select value={apptFilter} onChange={(e) => setApptFilter(e.target.value)} style={{padding: "8px", borderRadius: "5px", border: "1px solid #ccc", outline: "none", cursor: "pointer"}}>
+                                        <option value="Pending">Pending</option>
+                                        <option value="Approved">Approved</option>
+                                        <option value="Done">Completed</option>
+                                        <option value="Cancelled">Cancelled</option>
+                                    </select>
+                                </div>
+                                <div style={{ flex: 1, overflowY: "auto" }}>
+                                    {filteredAppointments.length === 0 ? <p style={{color: "#999", textAlign: "center", padding: "20px"}}>No {apptFilter} appointments.</p> : (
+                                        filteredAppointments.map(appt => (
+                                            <div key={appt.id} style={{padding: "15px", marginBottom: "10px", border: "1px solid #eee", borderRadius: "8px", background: "#f9f9f9", borderLeft: appt.status === "Done" ? "5px solid #2196F3" : (appt.status === "Approved" ? "5px solid green" : (appt.status === "Cancelled" ? "5px solid red" : "5px solid orange")), position: "relative"}}>
+                                                <div style={{ display: "flex", justifyContent: "space-between" }}><strong>{appt.petName}</strong><span style={{ fontSize: "12px", color: "#666" }}>{appt.date} @ {appt.time}</span></div>
+                                                <div style={{ fontSize: "14px", color: "#555", margin: "5px 0" }}>
+                                                    <span style={{fontWeight:"bold", fontSize:"12px", padding:"2px 8px", borderRadius:"10px", color:"white", background: appt.status === "Done" ? "#2196F3" : (appt.status === "Approved" ? "green" : (appt.status === "Cancelled" ? "red" : "orange"))}}>{appt.status}</span>
+                                                    <span style={{marginLeft:"10px"}}>Reason: {appt.reason}</span>
+                                                </div>
+                                                {appt.status === "Cancelled" && appt.cancellationReason && (<div style={{fontSize:"12px", color:"red", marginTop:"5px"}}><strong>Cancellation Reason:</strong> {appt.cancellationReason}</div>)}
+                                                {(appt.status === "Approved" || appt.status === "Pending") && (
+                                                    <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
+                                                        <button onClick={() => openCancelModal(appt.id)} style={{background:"#ffebee", color:"red", border:"1px solid red", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>✖ Cancel</button>
+                                                        <button onClick={() => openRescheduleModal(appt)} style={{background:"#e3f2fd", color:"#1565C0", border:"1px solid #1565C0", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>📅 Reschedule</button>
+                                                    </div>
+                                                )}
+                                                {appt.status === "Done" && (
+                                                    <button onClick={() => handleViewMedicalRecord(appt)} style={{marginTop: "10px", background: "#E3F2FD", color: "#2196F3", border: "1px solid #2196F3", borderRadius: "20px", padding: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "bold", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "5px"}}>
+                                                        📄 View Medical Record
+                                                    </button>
+                                                )}
                                             </div>
-                                        )}
-                                        {appt.status === "Done" && (
-                                            <button onClick={() => handleViewMedicalRecord(appt)} style={{marginTop: "10px", background: "#E3F2FD", color: "#2196F3", border: "1px solid #2196F3", borderRadius: "20px", padding: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "bold", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "5px"}}>
-                                                📄 View Medical Record
-                                            </button>
-                                        )}
-                                    </div>
-                                ))
-                            )}
-                        </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

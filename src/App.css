@@ -10,6 +10,10 @@ body {
   overflow-x: hidden;
 }
 
+:root {
+  color-scheme: light;
+}
+
 /* --- LAYOUT & NAVBAR --- */
 .dashboard-container {
   display: flex;
@@ -45,26 +49,54 @@ body {
   object-fit: contain;
 }
 
-/* src/App.css */
-
+/* --- MAIN CONTENT --- */
 .main-content {
-  max-width: 1200px; /* Limits width to a standard size */
-  margin: 0 auto;    /* Centers the container */
-  padding: 20px;     /* Adds breathing room */
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
 }
 
-/* Also, let's improve the inputs so they don't look huge */
+/* --- FORMS & INPUTS (Visibility Fix Included) --- */
 input, select, textarea {
   width: 100%;
   padding: 12px 15px;
   margin: 8px 0;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
-  background: #f9f9f9;
+  
+  /* FORCE VISIBILITY IN DARK MODE */
+  background-color: #f9f9f9 !important;
+  color: #333333 !important; 
+  
   font-family: inherit;
   box-sizing: border-box;
-  max-width: 100%; /* Ensures they respect the container */
+  max-width: 100%;
+
+  /* REMOVES IPHONE DEFAULT STYLING */
+  -webkit-appearance: none;
+  appearance: none;
 }
+
+input:focus, select:focus, textarea:focus {
+  outline: none; 
+  border-color: #2196F3; 
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+input[type="date"], input[type="datetime-local"] {
+  color-scheme: light; 
+}
+
+.action-btn {
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.action-btn:hover { opacity: 0.9; }
 
 /* --- TABS --- */
 .tab-container {
@@ -122,48 +154,6 @@ input, select, textarea {
 }
 .stat-card:hover { transform: translateY(-2px); }
 
-/* --- FORMS --- */
-input, select, textarea {
-  width: 100%;
-  padding: 12px 15px;
-  margin: 8px 0;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  
-  /* FORCE COLORS HERE */
-  background-color: #f9f9f9 !important;
-  color: #333333 !important; /* Forces dark text */
-  
-  font-family: inherit;
-  box-sizing: border-box;
-
-  /* IPHONE FIX: Removes the default "glass" look on iOS */
-  -webkit-appearance: none;
-  appearance: none;
-}
-
-input:focus, select:focus, textarea:focus {
-  outline: none; 
-  border-color: #2196F3; 
-  background-color: #ffffff !important;
-  color: #000000 !important;
-}
-
-/* Also fix the Date Picker specifically if you use one */
-input[type="date"], input[type="datetime-local"] {
-  color-scheme: light; /* Forces the internal calendar popup to be light mode */
-}
-
-.action-btn {
-  padding: 10px 20px;
-  border-radius: 6px;
-  font-weight: 600;
-  border: none;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
-.action-btn:hover { opacity: 0.9; }
-
 /* --- TABLES --- */
 table {
   width: 100%;
@@ -211,6 +201,15 @@ tr:hover td { background: #fafafa; }
   gap: 10px;
 }
 
+.chat-input-bar {
+  display: flex;
+  gap: 10px;
+  padding: 15px;
+  border-top: 1px solid #eee;
+  background: white;
+  flex-shrink: 0;
+}
+
 .chat-bubble {
   padding: 10px 15px;
   border-radius: 18px;
@@ -231,7 +230,7 @@ tr:hover td { background: #fafafa; }
   font-weight: bold;
 }
 
-/* --- AUTHENTICATION PAGES (Login/Signup) --- */
+/* --- AUTHENTICATION --- */
 .auth-container {
   min-height: 100vh;
   width: 100vw;
@@ -240,8 +239,6 @@ tr:hover td { background: #fafafa; }
   align-items: center;
   position: relative;
   overflow: hidden;
-
-  /* layered gradient */
   background:
     radial-gradient(circle at top left, #64b5f6, transparent 40%),
     radial-gradient(circle at bottom right, #81d4fa, transparent 45%),
@@ -259,37 +256,22 @@ tr:hover td { background: #fafafa; }
   z-index: 1;
 }
 
-.auth-logo-img {
-  height: 80px;
-  width: auto;
-  margin-bottom: 15px;
-  display: block;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.auth-title {
-  color: #2c3e50;
-  margin-bottom: 5px;
-  font-size: 28px;
-}
-
-.auth-subtitle {
-  color: #7f8c8d;
-  margin-bottom: 30px;
-  font-size: 14px;
-}
-
-.auth-link {
-  color: #2196F3;
-  text-decoration: none;
-  font-weight: 600;
-  margin-top: 20px;
-  display: inline-block;
-}
+.auth-logo-img { height: 80px; width: auto; margin: 0 auto 15px auto; display: block; }
+.auth-title { color: #2c3e50; margin-bottom: 5px; font-size: 28px; }
+.auth-subtitle { color: #7f8c8d; margin-bottom: 30px; font-size: 14px; }
+.auth-link { color: #2196F3; text-decoration: none; font-weight: 600; margin-top: 20px; display: inline-block; }
 .auth-link:hover { text-decoration: underline; }
 
-/* --- CUSTOM CALENDAR STYLES --- */
+.auth-container::before, .auth-container::after {
+  content: ""; position: absolute; width: 320px; height: 320px;
+  background: rgba(255, 255, 255, 0.18); border-radius: 50%;
+  filter: blur(70px); animation: float 12s ease-in-out infinite;
+}
+.auth-container::before { top: -120px; left: -120px; }
+.auth-container::after { bottom: -140px; right: -140px; animation-delay: 6s; }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-30px); } }
+
+/* --- CALENDAR --- */
 .react-calendar {
   width: 100% !important;
   max-width: 100%;
@@ -300,360 +282,49 @@ tr:hover td { background: #fafafa; }
   line-height: 1.5em;
   box-shadow: 0 4px 10px rgba(0,0,0,0.02);
 }
+.react-calendar__navigation button { color: #2196F3; min-width: 44px; background: none; font-size: 16px; font-weight: bold; margin-top: 8px; }
+.react-calendar__month-view__days__day--weekend { color: #d32f2f; }
+.react-calendar__tile--now { background: #fff3e0 !important; color: #333; }
+.react-calendar__tile--active { background: #2196F3 !important; color: white !important; border-radius: 8px; }
+.react-calendar__tile:enabled:hover, .react-calendar__tile:enabled:focus { background-color: #e3f2fd; border-radius: 8px; }
 
-.auth-container::before,
-.auth-container::after {
-  content: "";
-  position: absolute;
-  width: 320px;
-  height: 320px;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 50%;
-  filter: blur(70px);
-  animation: float 12s ease-in-out infinite;
-}
-
-.auth-container::before {
-  top: -120px;
-  left: -120px;
-}
-
-.auth-container::after {
-  bottom: -140px;
-  right: -140px;
-  animation-delay: 6s;
-}
-
-@keyframes float {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-30px);
-  }
-}
-
-.react-calendar__navigation button {
-  color: #2196F3;
-  min-width: 44px;
-  background: none;
-  font-size: 16px;
-  font-weight: bold;
-  margin-top: 8px;
-}
-
-.react-calendar__month-view__days__day--weekend {
-  color: #d32f2f; /* Red weekends */
-}
-
-.react-calendar__tile--now {
-  background: #fff3e0 !important;
-  color: #333;
-}
-
-.react-calendar__tile--active {
-  background: #2196F3 !important;
-  color: white !important;
-  border-radius: 8px;
-}
-
-.react-calendar__tile:enabled:hover,
-.react-calendar__tile:enabled:focus {
-  background-color: #e3f2fd;
-  border-radius: 8px;
-}
-
-/* --- LANDING PAGE STYLES --- */
-.home-container {
-  padding-top: 70px; /* Space for fixed navbar */
-}
-
+/* --- LANDING PAGE --- */
+.home-container { padding-top: 70px; }
 .hero-section {
-  width: 100vw;
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 120px 100px;
-  box-sizing: border-box;
-  position: relative;
-  overflow: hidden;
-
-  background:
-    radial-gradient(circle at top left, #bbdefb, transparent 45%),
-    radial-gradient(circle at bottom right, #e3f2fd, transparent 45%),
-    linear-gradient(135deg, #e3f2fd 0%, #ffffff 100%);
+  width: 100vw; min-height: 100vh; display: flex; align-items: center; justify-content: space-between;
+  padding: 120px 100px; box-sizing: border-box; position: relative; overflow: hidden;
+  background: radial-gradient(circle at top left, #bbdefb, transparent 45%), radial-gradient(circle at bottom right, #e3f2fd, transparent 45%), linear-gradient(135deg, #e3f2fd 0%, #ffffff 100%);
 }
+.hero-content { max-width: 1000px; }
+.hero-content h1 { font-size: 3.5rem; color: #2c3e50; margin-bottom: 20px; line-height: 1.2; }
+.hero-content p { font-size: 1.2rem; color: #666; margin-bottom: 30px; }
+.hero-btn { padding: 15px 40px; font-size: 1.2rem; background: #FF9800; color: white; border: none; border-radius: 50px; cursor: pointer; font-weight: bold; box-shadow: 0 5px 15px rgba(255, 152, 0, 0.3); transition: transform 0.2s; }
+.hero-btn:hover { transform: translateY(-3px); }
+.hero-image { font-size: 100px; }
+.services-section { padding: 60px 10%; background: #fdfdfd; }
+.services-section h2 { text-align: center; font-size: 2.5rem; color: #2c3e50; margin-bottom: 40px; }
 
-.hero-content {
-  max-width: 1000px;
-}
-
-.hero-content h1 {
-  font-size: 3.5rem;
-  color: #2c3e50;
-  margin-bottom: 20px;
-  line-height: 1.2;
-}
-
-.hero-content p {
-  font-size: 1.2rem;
-  color: #666;
-  margin-bottom: 30px;
-}
-
-.hero-btn {
-  padding: 15px 40px;
-  font-size: 1.2rem;
-  background: #FF9800;
-  color: white;
-  border: none;
-  border-radius: 50px;
-  cursor: pointer;
-  font-weight: bold;
-  box-shadow: 0 5px 15px rgba(255, 152, 0, 0.3);
-  transition: transform 0.2s;
-}
-
-.hero-btn:hover {
-  transform: translateY(-3px);
-}
-
-.hero-image {
-  font-size: 100px;
-}
-
-.hero-section::before,
-.hero-section::after {
-  content: "";
-  position: absolute;
-  width: 380px;
-  height: 380px;
-  background: rgba(33, 150, 243, 0.12);
-  border-radius: 50%;
-  filter: blur(90px);
-  z-index: 0;
-}
-
-.hero-section::before {
-  top: -120px;
-  left: -120px;
-}
-
-.hero-section::after {
-  bottom: -150px;
-  right: -150px;
-}
-
-.services-section {
-  padding: 60px 10%;
-  background: #fdfdfd;
-}
-
-.services-section h2 {
-  text-align: center;
-  font-size: 2.5rem;
-  color: #2c3e50;
-  margin-bottom: 40px;
-}
-/* =========================
-   MOBILE RESPONSIVE FIXES
-   ========================= */
-@media (max-width: 768px) {
-
-  /* Navbar */
-  .navbar {
-    padding: 10px 15px;
-  }
-
-  .logo {
-    font-size: 18px;
-  }
-
-  /* Main content */
-  .main-content {
-    padding: 15px;
-  }
-
-  /* Cards */
-  .card-grid {
-    grid-template-columns: 1fr;
-    gap: 15px;
-  }
-
-  .card,
-  .stat-card {
-    padding: 15px;
-  }
-
-  /* Tabs */
-  .tab-container {
-    overflow-x: auto;
-    flex-wrap: nowrap;
-  }
-
-  .tab-btn {
-    white-space: nowrap;
-    padding: 8px 14px;
-    font-size: 14px;
-  }
-
-  /* Tables */
-  table {
-    display: block;
-    overflow-x: auto;
-    white-space: nowrap;
-  }
-  /* --- TABLE WRAPPER FOR MOBILE --- */
-  .table-wrapper {
-  width: 100%;
-  overflow-x: auto;
-  }
-
-  /* Chat */
-  .chat-layout {
-    grid-template-columns: 1fr;
-    height: calc(100vh - 120px);
-  }
-
-  .chat-sidebar {
-    display: none;
-  }
-
-  /* Auth pages */
-  .auth-card {
-    padding: 25px;
-    margin: 15px;
-  }
-
-  /* Hero section */
-  .hero-section {
-    flex-direction: column;
-    padding: 80px 20px;
-    text-align: center;
-  }
-
-  .hero-content h1 {
-    font-size: 2.2rem;
-  }
-
-  .hero-content p {
-    font-size: 1rem;
-  }
-
-  .hero-image {
-    font-size: 70px;
-    margin-top: 30px;
-  }
-}
-
-/* =========================
-   OWNER DASHBOARD – MOBILE
-   ========================= */
-@media (max-width: 768px) {
-
-  /* Reduce visual density */
-  h2, h3 {
-    font-size: 1.2rem;
-  }
-
-  /* Full-width buttons for owners */
-  .action-btn {
-    width: 100%;
-    margin-top: 10px;
-  }
-
-  /* Tables */
-  table {
-    display: block;
-    white-space: nowrap;
-  }
-
-  /* Chat mobile behavior */
-  .chat-layout {
-    grid-template-columns: 1fr;
-    height: calc(100vh - 140px);
-  }
-
-  .chat-sidebar {
-    display: none;
-  }
-}
-.chat-input-bar {
-  display: flex;
-  gap: 10px;
-  padding: 15px;
-  border-top: 1px solid #eee;
-  background: white;
-  flex-shrink: 0;
-}
-:root {
-  color-scheme: light;
-}
-
-body {
-  background-color: white;
-  color: black;
-}
-/* --- MOBILE LAYOUT FIXES (Add to bottom of App.css) --- */
-
-@media (max-width: 768px) {
-  /* 1. Force the main dashboard sections to stack vertically */
-  /* This targets the container holding your bottom cards */
-  .dashboard-container > div, 
-  .main-content > div {
-    display: flex;
-    flex-direction: column !important;
-    gap: 20px;
-  }
-
-  /* 2. Ensure every card takes full width */
-  .card, .stat-card {
-    width: 100% !important;
-    margin-bottom: 15px;
-    box-sizing: border-box; /* Ensures padding doesn't break width */
-  }
-  
-  /* 3. Fix the squished Calendar */
-  .react-calendar {
-    width: 100% !important;
-    font-size: 14px; /* Make text slightly smaller */
-  }
-  
-  /* Give the calendar days some breathing room */
-  .react-calendar__tile {
-    padding: 10px 5px !important; 
-  }
-}
-@media (max-width: 768px) {
-  /* Target any fixed position modal */
-  div[style*="position: absolute"], 
-  div[style*="position: fixed"] {
-    width: 90% !important;      /* Don't let it be wider than the phone */
-    max-width: 350px !important; 
-    left: 50% !important;       /* Center horizontally */
-    transform: translateX(-50%) !important; /* Perfect centering */
-    top: 20% !important;        /* Move it down a bit so it's not hidden by navbar */
-    overflow-wrap: break-word;  /* Prevent text from overflowing */
-  }
-}
 /* =========================================
-   FINAL MOBILE RESPONSIVE FIXES 
+   MASTER MOBILE RESPONSIVE BLOCK
+   (Everything combined here to prevent conflicts)
    ========================================= */
 
 @media (max-width: 768px) {
-
-  /* --- 1. FORCE VERTICAL STACKING (Fixes Squished Columns) --- */
   
-  /* This targets the main container and forces it to stack top-to-bottom */
-  .main-content, 
-  .dashboard-container {
+  /* --- 1. GLOBAL MOBILE STYLES --- */
+  .navbar { padding: 10px 15px; }
+  .logo { font-size: 18px; }
+  .tab-container { overflow-x: auto; flex-wrap: nowrap; }
+  .tab-btn { white-space: nowrap; padding: 8px 14px; font-size: 14px; }
+  
+  /* --- 2. LAYOUT STACKING (Fixes "Tight" Appointments) --- */
+  /* This forces the layout to stack vertically instead of side-by-side */
+  .main-content, .dashboard-container {
     display: flex;
     flex-direction: column !important;
     padding: 10px !important;
   }
-
-  /* This targets the wrapper holding the two side-by-side cards */
+  
   .main-content > div {
     display: flex;
     flex-direction: column !important;
@@ -661,7 +332,7 @@ body {
     gap: 20px;
   }
 
-  /* Ensure the cards themselves take up the full screen width */
+  /* Make all cards full width */
   .card, .stat-card, .request-appointment-section, .appointment-list-section {
     width: 100% !important;
     max-width: 100% !important;
@@ -670,27 +341,43 @@ body {
     box-sizing: border-box;
   }
 
-  /* --- 2. FIX THE CALENDAR (Readable Numbers) --- */
+  .card-grid { grid-template-columns: 1fr; gap: 15px; }
+  .card, .stat-card { padding: 15px; }
+
+  /* --- 3. CALENDAR FIXES (Readable Numbers) --- */
   .react-calendar {
     width: 100% !important;
-    font-size: 13px !important; /* Slightly smaller font prevents overlap */
+    font-size: 13px !important;
   }
-  
   .react-calendar__tile {
-    padding: 10px 0 !important; /* Remove side padding so numbers fit */
-    max-width: 14.28% !important; /* Forces exactly 7 days per row */
+    padding: 10px 0 !important;
+    max-width: 14.28% !important; /* 7 days per row exactly */
     overflow: visible !important;
   }
 
-  /* --- 3. FIX THE NOTIFICATION POPUP (Center & Widen) --- */
-  /* This targets any fixed modal (like your notification or message popup) */
+  /* --- 4. MODAL & NOTIFICATION FIXES (Centered) --- */
   div[style*="position: absolute"], 
   div[style*="position: fixed"] {
-    width: 90vw !important;       /* Take 90% of the screen width */
-    max-width: 380px !important;  /* Limit max width */
-    left: 50% !important;         /* Center X */
-    transform: translateX(-50%) !important; /* Perfect Center Alignment */
-    top: 15% !important;          /* Position near top */
+    width: 90vw !important;
+    max-width: 380px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    top: 15% !important;
     right: auto !important;
   }
+
+  /* --- 5. CHAT & TABLES --- */
+  .chat-layout { grid-template-columns: 1fr; height: calc(100vh - 120px); }
+  .chat-sidebar { display: none; }
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+  .table-wrapper { width: 100%; overflow-x: auto; }
+
+  /* --- 6. LANDING PAGE --- */
+  .hero-section { flex-direction: column; padding: 80px 20px; text-align: center; }
+  .hero-content h1 { font-size: 2.2rem; }
+  .hero-image { font-size: 70px; margin-top: 30px; }
+  
+  /* --- 7. OWNER DASHBOARD SPECIFIC --- */
+  h2, h3 { font-size: 1.2rem; }
+  .action-btn { width: 100%; margin-top: 10px; }
 }
