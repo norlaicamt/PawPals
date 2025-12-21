@@ -5,7 +5,7 @@ import { collection, addDoc, query, where, onSnapshot, orderBy, doc, updateDoc, 
 import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png";
 
-// --- PREDEFINED BREED LISTS ---
+// --- CONSTANTS ---
 const DOG_BREEDS = [
   "Aspin (Asong Pinoy)", "Beagle", "Bulldog", "Chihuahua", "Dachshund", 
   "German Shepherd", "Golden Retriever", "Labrador", "Poodle", "Pug", 
@@ -17,6 +17,13 @@ const CAT_BREEDS = [
   "Persian", "Ragdoll", "Russian Blue", "Scottish Fold", "Siamese", 
   "Sphynx", "Mixed / Unknown", "Other"
 ];
+
+// --- HELPER: TIME CONVERSION ---
+const getTimeInMinutes = (timeStr) => {
+    if (!timeStr) return 0;
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    return (hours * 60) + minutes;
+};
 
 // --- TOAST COMPONENT ---
 const Toast = ({ message, type, onClose }) => {
@@ -46,7 +53,7 @@ const OwnerDashboard = () => {
 
   // --- MOBILE SUB-TAB STATES ---
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
-  const [apptSubTab, setApptSubTab] = useState("request"); // "request" or "list"
+  const [apptSubTab, setApptSubTab] = useState("request"); 
 
   // Toast State
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
@@ -163,13 +170,20 @@ const OwnerDashboard = () => {
         });
         setMyAppointments(appts);
         
-        const alerts = appts.filter(a => a.status !== "Pending").map(a => ({
-            id: a.id, 
-            type: "alert", 
-            text: `Your appointment for ${a.petName} on ${a.date} is ${a.status}.`, 
-            isSeenByOwner: a.isSeenByOwner,
-            status: a.status
-        }));
+        // --- UPDATED NOTIFICATION LOGIC ---
+        const alerts = appts.filter(a => a.status !== "Pending").map(a => {
+            let text = `Your appointment for ${a.petName} on ${a.date} is ${a.status}.`;
+            if (a.status === "Cancelled" && a.cancellationReason) {
+                text += ` Reason: ${a.cancellationReason}`; // Append reason to notification
+            }
+            return {
+                id: a.id, 
+                type: "alert", 
+                text: text,
+                isSeenByOwner: a.isSeenByOwner,
+                status: a.status
+            };
+        });
         
         setNotifications(alerts);
         setUnreadCount(alerts.filter(a => !a.isSeenByOwner).length);
@@ -332,20 +346,15 @@ const OwnerDashboard = () => {
   };
 
   const openRescheduleModal = (appt) => {
-      // Convert formatted date string back to YYYY-MM-DD for input
-      const d = new Date(appt.date);
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      
       setRescheduleData({
           id: appt.id,
-          date: `${year}-${month}-${day}`,
+          date: appt.date,
           time: appt.time
       });
       setShowRescheduleModal(true);
   };
 
+  // --- UPDATED RESCHEDULE LOGIC (TIME RANGE) ---
   const handleRescheduleSubmit = async (e) => {
       e.preventDefault();
       if (isSaving) return; 
@@ -360,25 +369,40 @@ const OwnerDashboard = () => {
         if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
         if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-        const formattedDate = rescheduleData.date
-        const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", rescheduleData.time));
+        // 1. Prepare new time range
+        const newStart = getTimeInMinutes(rescheduleData.time);
+        const newEnd = newStart + 60; // 60 mins duration
+
+        // 2. Query ALL appointments for this DATE
+        const qConflict = query(collection(db, "appointments"), where("date", "==", rescheduleData.date));
         const snapshot = await getDocs(qConflict);
+
+        // 3. Check Overlaps
         const hasConflict = snapshot.docs.some(doc => {
-            if (doc.id === rescheduleData.id) return false;
-            return doc.data().status !== "Cancelled" && doc.data().status !== "Rejected";
+            if (doc.id === rescheduleData.id) return false; 
+            const data = doc.data();
+            if (data.status === "Cancelled" || data.status === "Rejected") return false;
+
+            const existingStart = getTimeInMinutes(data.time);
+            const existingEnd = existingStart + 60;
+
+            // Overlap: (StartA < EndB) && (EndA > StartB)
+            return (newStart < existingEnd && newEnd > existingStart);
         });
 
-        if (hasConflict) throw new Error(`CONFLICT: ${rescheduleData.time} is already booked.`);
+        if (hasConflict) throw new Error(`CONFLICT: The slot ${rescheduleData.time} (or one near it) is already booked.`);
 
         await updateDoc(doc(db, "appointments", rescheduleData.id), {
-            date: formattedDate,
+            date: rescheduleData.date,
             time: rescheduleData.time,
-            status: "Pending",
+            status: "Pending", 
             isSeenByOwner: false
         });
+        
         showToast("Appointment Rescheduled! It is now Pending approval.");
         setShowRescheduleModal(false);
       } catch (error) {
+        console.error(error);
         showToast(error.message, "error");
       } finally {
         setIsSaving(false); 
@@ -486,6 +510,7 @@ const OwnerDashboard = () => {
     }
   };
   
+  // --- UPDATED BOOKING LOGIC (TIME RANGE) ---
   const handleBookAppointment = async (e) => {
       e.preventDefault();
       if (!selectedPetId) return showToast("Please add a pet first!", "error");
@@ -503,22 +528,43 @@ const OwnerDashboard = () => {
         if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
         if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-        const pet = myPets.find(p => p.id === selectedPetId);
-        const formattedDate = apptDate; // Consistent format
+        // 1. Prepare new time range
+        const newStart = getTimeInMinutes(apptTime);
+        const newEnd = newStart + 60; // 60 mins duration
 
-        const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", apptTime));
+        // 2. Query ALL appointments for this DATE
+        const qConflict = query(collection(db, "appointments"), where("date", "==", apptDate));
         const snapshot = await getDocs(qConflict);
-        const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled" && doc.data().status !== "Rejected");
 
-        if (hasConflict) throw new Error(`CONFLICT: ${apptTime} is already booked.`);
+        // 3. Check Overlaps
+        const hasConflict = snapshot.docs.some(doc => {
+            const data = doc.data();
+            if (data.status === "Cancelled" || data.status === "Rejected") return false;
+
+            const existingStart = getTimeInMinutes(data.time);
+            const existingEnd = existingStart + 60;
+
+            // Overlap: (StartA < EndB) && (EndA > StartB)
+            return (newStart < existingEnd && newEnd > existingStart);
+        });
+
+        if (hasConflict) throw new Error(`CONFLICT: The slot ${apptTime} (or one near it) is already booked.`);
+
+        const pet = myPets.find(p => p.id === selectedPetId);
 
         await addDoc(collection(db, "appointments"), {
-            ownerId: user.uid, petId: selectedPetId, petName: pet ? pet.name : "Unknown",
-            date: formattedDate, time: apptTime, reason: "Check-up", status: "Pending", createdAt: new Date(), isSeenByOwner: false
+            ownerId: user.uid, 
+            petId: selectedPetId, 
+            petName: pet ? pet.name : "Unknown",
+            date: apptDate, 
+            time: apptTime, 
+            reason: "Check-up", 
+            status: "Pending", 
+            createdAt: new Date(), 
+            isSeenByOwner: false
         });
         showToast("Appointment Requested!");
         setApptFilter("Pending");
-        // Reset form
         setApptDate("");
         setApptTime("08:00");
       } catch (error) {
@@ -565,7 +611,7 @@ const OwnerDashboard = () => {
       color: activeTab === name ? "white" : "#555", 
       boxShadow: activeTab === name ? "0 4px 10px rgba(33, 150, 243, 0.4)" : "0 2px 4px rgba(0,0,0,0.05)", 
       fontWeight: "bold", 
-      transition: "all 0.2s",
+      transition: "all 0.2s", 
       width: "100%", 
       textAlign: "center"
   });
@@ -781,6 +827,13 @@ const OwnerDashboard = () => {
                                                         <div style={{fontSize: "14px", color: "#666", margin: "4px 0"}}>📅 {appt.date} at {appt.time}</div>
                                                         <div style={{fontSize: "13px", color: "#888"}}>{appt.reason}</div>
                                                         <span style={{fontSize: "11px", background: getStatusColor(appt.status), color: "white", padding: "2px 8px", borderRadius: "4px", marginTop: "5px", display: "inline-block"}}>{appt.status}</span>
+                                                        
+                                                        {/* --- SHOW REASON FOR CANCELLATION --- */}
+                                                        {appt.status === "Cancelled" && appt.cancellationReason && (
+                                                            <div style={{fontSize:"12px", color: "#d32f2f", marginTop: "5px", background: "#ffebee", padding: "5px", borderRadius: "4px"}}>
+                                                                <strong>Reason:</strong> {appt.cancellationReason}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                     <div style={{display: "flex", flexDirection: "column", gap: "5px"}}>
                                                         {appt.status === "Pending" && (
@@ -822,7 +875,7 @@ const OwnerDashboard = () => {
                                     color: msg.senderId === user.uid ? "white" : "#333", 
                                     padding: "10px 15px", 
                                     borderRadius: "18px", 
-                                    borderBottomRightRadius: msg.senderId === user.uid ? "4px" : "18px",
+                                    borderBottomRightRadius: msg.senderId === user.uid ? "4px" : "18px", 
                                     borderBottomLeftRadius: msg.senderId !== user.uid ? "4px" : "18px",
                                     fontSize: "14px",
                                     boxShadow: "0 1px 2px rgba(0,0,0,0.1)"

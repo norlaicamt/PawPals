@@ -125,6 +125,13 @@ const StaffDashboard = () => {
       onConfirm: () => {} 
   });
 
+  // --- DECLINE REASON MODAL STATE ---
+  const [declineModal, setDeclineModal] = useState({ 
+      show: false, 
+      apptId: null, 
+      reason: "" 
+  });
+
   // --- QUICK USAGE MODAL STATE ---
     const [usageModal, setUsageModal] = useState({ 
         show: false, 
@@ -171,9 +178,8 @@ const StaffDashboard = () => {
     return () => { unsubAppts(); unsubChat(); unsubInventory(); unsubLogs(); };
   }, []);
 
-  // --- DERIVED STATE (REPLACING STATE EFFECTS) ---
+  // --- DERIVED STATE ---
   
-  // 1. Inventory Calculations
   const lowStockItems = useMemo(() => inventory.filter(i => i.quantity <= (i.threshold || 5)), [inventory]);
   
   const expiredItems = useMemo(() => {
@@ -182,7 +188,6 @@ const StaffDashboard = () => {
       return inventory.filter(i => i.expiryDate && new Date(i.expiryDate) < today);
   }, [inventory]);
 
-  // 2. Chat Messages Calculation
   const chatMessages = useMemo(() => {
     if (!selectedChatOwner) return [];
     return allMessages.filter(msg => 
@@ -192,7 +197,6 @@ const StaffDashboard = () => {
     );
   }, [allMessages, selectedChatOwner]);
 
-  // 3. Filtered Pet Records
   const filteredRecords = useMemo(() => {
     return allPets.filter(pet => {
       const owner = owners.find(o => o.id === pet.ownerId);
@@ -213,7 +217,6 @@ const StaffDashboard = () => {
     }).sort((a, b) => a.name.localeCompare(b.name));
   }, [allPets, owners, petSearch, petFilterType]);
 
-  // 4. Report Stats Calculation (Replaces cascading useEffect)
   const { generatedStats, serviceBreakdown } = useMemo(() => {
     const emptyStats = {
         itemsAdded: 0, itemsUsed: 0, totalAppointments: 0,
@@ -396,6 +399,29 @@ const StaffDashboard = () => {
   // --- ACTIONS ---
   const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
   
+  // --- DECLINE ACTIONS ---
+  const openDeclineModal = (apptId) => {
+      setDeclineModal({ show: true, apptId, reason: "" });
+  };
+
+  const handleConfirmDecline = async () => {
+      if (!declineModal.reason.trim()) return showToast("Please provide a reason.", "error");
+      
+      try {
+          await updateDoc(doc(db, "appointments", declineModal.apptId), {
+              status: "Cancelled", 
+              cancellationReason: declineModal.reason,
+              staffId: auth.currentUser.uid,
+              lastUpdated: new Date()
+          });
+          showToast("Appointment declined.");
+          setDeclineModal({ show: false, apptId: null, reason: "" });
+      } catch (err) {
+          console.error(err);
+          showToast("Error declining appointment.", "error");
+      }
+  };
+
   // --- INVENTORY ACTIONS ---
   const handleOpenAddInventory = () => {
       setEditingInventoryId(null);
@@ -653,7 +679,6 @@ const confirmQuickUsage = async () => {
       const selectedDate = new Date(walkInData.date);
       if (selectedDate.getDay() === 6) return showToast("Cannot book on Saturdays. Clinic is closed.", "error");
 
-      // --- CONFLICT CHECK ---
       const qConflict = query(collection(db, "appointments"), where("date", "==", walkInData.date), where("time", "==", walkInData.time));
       const snapshot = await getDocs(qConflict);
       const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled");
@@ -932,7 +957,8 @@ const confirmQuickUsage = async () => {
                                                 {appt.status === "Pending" && (
                                                     <>
                                                         <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{background:"#4CAF50"}}>Approve</button>
-                                                        <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{background:"#f44336"}}>Decline</button>
+                                                        {/* UPDATED: Open Modal instead of direct update */}
+                                                        <button onClick={() => openDeclineModal(appt.id)} className="action-btn" style={{background:"#f44336"}}>Decline</button>
                                                     </>
                                                 )}
                                                 {appt.status === "Approved" && (
@@ -951,6 +977,8 @@ const confirmQuickUsage = async () => {
                 </div>
             )}
 
+            {/* ... (RECORDS TAB, MESSAGES TAB, INVENTORY TAB, REPORTS TAB remain unchanged) ... */}
+            
             {/* --- RECORDS TAB (UPDATED) --- */}
             {activeTab === "records" && (
                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
@@ -1443,6 +1471,27 @@ const confirmQuickUsage = async () => {
                       >
                           Yes
                       </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 7. Decline Reason Modal */}
+      {declineModal.show && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:3000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%"}}>
+                  <h3 style={{marginTop:0, color:"#d32f2f"}}>Decline Appointment</h3>
+                  <p style={{fontSize:"14px", color:"#666"}}>Please provide a reason for the owner:</p>
+                  <textarea 
+                      value={declineModal.reason} 
+                      onChange={(e) => setDeclineModal({...declineModal, reason: e.target.value})}
+                      placeholder="e.g. Time slot unavailable, Doctor is out..."
+                      rows="3"
+                      style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", boxSizing:"border-box"}}
+                  />
+                  <div style={{display:"flex", gap:"10px"}}>
+                      <button onClick={handleConfirmDecline} style={{flex:1, background:"#f44336", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>Decline Request</button>
+                      <button onClick={() => setDeclineModal({ ...declineModal, show: false })} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
                   </div>
               </div>
           </div>
