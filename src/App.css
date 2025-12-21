@@ -595,3 +595,45 @@ body {
   background-color: white;
   color: black;
 }
+/* --- MOBILE LAYOUT FIXES (Add to bottom of App.css) --- */
+
+@media (max-width: 768px) {
+  /* 1. Force the main dashboard sections to stack vertically */
+  /* This targets the container holding your bottom cards */
+  .dashboard-container > div, 
+  .main-content > div {
+    display: flex;
+    flex-direction: column !important;
+    gap: 20px;
+  }
+
+  /* 2. Ensure every card takes full width */
+  .card, .stat-card {
+    width: 100% !important;
+    margin-bottom: 15px;
+    box-sizing: border-box; /* Ensures padding doesn't break width */
+  }
+  
+  /* 3. Fix the squished Calendar */
+  .react-calendar {
+    width: 100% !important;
+    font-size: 14px; /* Make text slightly smaller */
+  }
+  
+  /* Give the calendar days some breathing room */
+  .react-calendar__tile {
+    padding: 10px 5px !important; 
+  }
+}
+@media (max-width: 768px) {
+  /* Target any fixed position modal */
+  div[style*="position: absolute"], 
+  div[style*="position: fixed"] {
+    width: 90% !important;      /* Don't let it be wider than the phone */
+    max-width: 350px !important; 
+    left: 50% !important;       /* Center horizontally */
+    transform: translateX(-50%) !important; /* Perfect centering */
+    top: 20% !important;        /* Move it down a bit so it's not hidden by navbar */
+    overflow-wrap: break-word;  /* Prevent text from overflowing */
+  }
+}
