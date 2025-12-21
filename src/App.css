@@ -637,3 +637,60 @@ body {
     overflow-wrap: break-word;  /* Prevent text from overflowing */
   }
 }
+/* =========================================
+   FINAL MOBILE RESPONSIVE FIXES 
+   ========================================= */
+
+@media (max-width: 768px) {
+
+  /* --- 1. FORCE VERTICAL STACKING (Fixes Squished Columns) --- */
+  
+  /* This targets the main container and forces it to stack top-to-bottom */
+  .main-content, 
+  .dashboard-container {
+    display: flex;
+    flex-direction: column !important;
+    padding: 10px !important;
+  }
+
+  /* This targets the wrapper holding the two side-by-side cards */
+  .main-content > div {
+    display: flex;
+    flex-direction: column !important;
+    width: 100% !important;
+    gap: 20px;
+  }
+
+  /* Ensure the cards themselves take up the full screen width */
+  .card, .stat-card, .request-appointment-section, .appointment-list-section {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin-right: 0 !important;
+    margin-left: 0 !important;
+    box-sizing: border-box;
+  }
+
+  /* --- 2. FIX THE CALENDAR (Readable Numbers) --- */
+  .react-calendar {
+    width: 100% !important;
+    font-size: 13px !important; /* Slightly smaller font prevents overlap */
+  }
+  
+  .react-calendar__tile {
+    padding: 10px 0 !important; /* Remove side padding so numbers fit */
+    max-width: 14.28% !important; /* Forces exactly 7 days per row */
+    overflow: visible !important;
+  }
+
+  /* --- 3. FIX THE NOTIFICATION POPUP (Center & Widen) --- */
+  /* This targets any fixed modal (like your notification or message popup) */
+  div[style*="position: absolute"], 
+  div[style*="position: fixed"] {
+    width: 90vw !important;       /* Take 90% of the screen width */
+    max-width: 380px !important;  /* Limit max width */
+    left: 50% !important;         /* Center X */
+    transform: translateX(-50%) !important; /* Perfect Center Alignment */
+    top: 15% !important;          /* Position near top */
+    right: auto !important;
+  }
+}
