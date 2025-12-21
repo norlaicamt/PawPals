@@ -46,7 +46,7 @@ const OwnerDashboard = () => {
   const [activeTab, setActiveTab] = useState("pets");
   const [apptFilter, setApptFilter] = useState("Pending");
 
-  // --- NEW: MOBILE SUB-TAB STATES ---
+  // --- MOBILE SUB-TAB STATES ---
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [apptSubTab, setApptSubTab] = useState("request"); // "request" or "list"
 
@@ -120,7 +120,7 @@ const OwnerDashboard = () => {
   const [apptDate, setApptDate] = useState(new Date());
   const [apptTime, setApptTime] = useState("08:00");
 
-  // --- NEW: LISTENER TO DETECT MOBILE SCREEN ---
+  // --- LISTENER TO DETECT MOBILE SCREEN ---
   useEffect(() => {
       const handleResize = () => setIsMobile(window.innerWidth <= 768);
       window.addEventListener("resize", handleResize);
@@ -158,13 +158,12 @@ const OwnerDashboard = () => {
         });
         setMyAppointments(appts);
         
-        // --- UPDATED: Include 'status' in the notification object for redirection ---
         const alerts = appts.filter(a => a.status !== "Pending").map(a => ({
             id: a.id, 
             type: "alert", 
             text: `Your appointment for ${a.petName} on ${a.date} is ${a.status}.`, 
             isSeenByOwner: a.isSeenByOwner,
-            status: a.status // Storing status here to use in click handler
+            status: a.status
         }));
         
         setNotifications(alerts);
@@ -186,7 +185,6 @@ const OwnerDashboard = () => {
     if (activeTab === "chat") scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, activeTab]);
 
-  // --- MARK MESSAGES AS READ WHEN TAB IS ACTIVE ---
   useEffect(() => {
       if (activeTab === "chat" && chatMessages.length > 0) {
           const unreadMsgs = chatMessages.filter(m => !m.read && m.senderId !== user.uid);
@@ -202,14 +200,11 @@ const OwnerDashboard = () => {
       }
   }, [activeTab, chatMessages, user.uid]);
 
-  // Filters
   const filteredPets = myPets.filter(pet => pet.name.toLowerCase().includes(petSearch.toLowerCase()));
   
   const filteredAppointments = myAppointments.filter(appt => {
       return appt.status === apptFilter;
   });
-
-  // --- ACTIONS ---
 
   const handleToggleNotifications = () => {
       setShowNotifDropdown(!showNotifDropdown);
@@ -220,14 +215,11 @@ const OwnerDashboard = () => {
       }
   };
 
-  // --- NEW: HANDLE NOTIFICATION CLICK ---
   const handleNotificationClick = (notif) => {
       setShowNotifDropdown(false);
-      // If it's an appointment alert, go to Appointments tab
       if (notif.type === "alert") {
           setActiveTab("appointments");
-          setApptSubTab("list"); // <--- ADD THIS LINE (Switches to List view on mobile)
-          // Automatically set the filter to match the notification
+          setApptSubTab("list");
           if (notif.status) {
               setApptFilter(notif.status); 
           }
@@ -347,7 +339,6 @@ const OwnerDashboard = () => {
 
   const handleRescheduleSubmit = async (e) => {
       e.preventDefault();
-      
       if (isSaving) return; 
       setIsSaving(true);
 
@@ -611,13 +602,13 @@ const OwnerDashboard = () => {
                             {notifications.length === 0 ? <p style={{color:"#888"}}>No updates.</p> : notifications.map(n => (
                                 <div 
                                     key={n.id} 
-                                    onClick={() => handleNotificationClick(n)} // --- CLICK HANDLER ---
+                                    onClick={() => handleNotificationClick(n)}
                                     style={{
                                         padding:"10px", 
                                         borderBottom:"1px solid #f0f0f0", 
                                         fontSize:"14px", 
                                         background: n.isSeenByOwner ? "white" : "#e3f2fd",
-                                        cursor: "pointer", // --- CURSOR POINTER ---
+                                        cursor: "pointer",
                                         transition: "background 0.2s"
                                     }}
                                     onMouseOver={(e) => e.currentTarget.style.background = "#f5f5f5"}
@@ -711,19 +702,27 @@ const OwnerDashboard = () => {
                         <input type="text" placeholder="🔍 Pet Search" value={petSearch} onChange={(e) => setPetSearch(e.target.value)} style={{ marginBottom: "15px", borderRadius: "20px", padding: "10px 15px", border: "1px solid #ddd", width: "95%", flexShrink: 0 }} />
                         <div style={{ flex: 1, overflowY: "auto", paddingRight: "5px" }}>
                             {filteredPets.length === 0 ? <p style={{color:"#888", textAlign:"center", padding:"20px"}}>No pets found.</p> : filteredPets.map(pet => (
-                                <div key={pet.id} style={{padding:"15px", borderBottom:"1px solid #eee", background: pet.deletionStatus === 'Pending' ? '#ffebee' : '#fff', position: "relative", borderRadius:"8px", marginBottom:"5px", border: "1px solid #f0f0f0"}}>
-                                    <div style={{fontSize:"18px"}}><span style={{marginRight:"10px", fontSize:"24px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span><strong>{pet.name}</strong></div>
+                                <div key={pet.id} style={{padding:"15px", borderBottom:"1px solid #eee", background: pet.deletionStatus === 'Pending' ? '#ffebee' : '#fff', borderRadius:"8px", marginBottom:"5px", border: "1px solid #f0f0f0", display: "flex", flexDirection: "column", gap: "5px"}}>
+                                    <div style={{display: "flex", alignItems: "center", justifyContent: "space-between"}}>
+                                        <div style={{fontSize:"18px"}}><span style={{marginRight:"10px", fontSize:"24px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span><strong>{pet.name}</strong></div>
+                                    </div>
+                                    
                                     <div style={{color:"#555", marginLeft:"34px"}}>{pet.species} - {pet.breed} ({pet.age} {pet.ageUnit || "Years"})</div>
+                                    
                                     {pet.medicalHistory && <div style={{marginLeft: "34px", marginTop: "5px", color: "#555", fontSize: "12px", fontStyle:"italic"}}><strong>Prev. History:</strong> {pet.medicalHistory}</div>}
-                                    {pet.deletionStatus === 'Pending' ? (
-                                        <div style={{marginLeft: "34px", marginTop: "5px", color: "red", fontWeight: "bold", fontSize: "12px"}}>Deletion Pending Approval</div>
-                                    ) : (
-                                        <div style={{position: "absolute", top: "15px", right: "15px", display:"flex", gap:"10px"}}>
-                                            <button onClick={() => handleViewHistory(pet)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"12px"}} title="View Medical History">View</button>
-                                            <button onClick={() => openEditPetModal(pet)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"12px"}} title="Edit Pet">Edit</button>
-                                            <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"12px", opacity: 0.6, color: "red"}} title="Request Delete">Delete</button>
-                                        </div>
-                                    )}
+                                    
+                                    {/* --- BUTTONS MOVED BELOW (MOBILE FRIENDLY) --- */}
+                                    <div style={{display: "flex", gap: "10px", marginTop: "15px", marginLeft: "34px", flexWrap: "wrap"}}>
+                                        {pet.deletionStatus === 'Pending' ? (
+                                            <div style={{color: "red", fontWeight: "bold", fontSize: "12px", width: "100%", padding: "5px", background: "#ffebee", borderRadius: "4px", textAlign: "center"}}>Deletion Pending Approval</div>
+                                        ) : (
+                                            <>
+                                                <button onClick={() => handleViewHistory(pet)} style={{flex: 1, padding: "8px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: "bold"}}>📄 History</button>
+                                                <button onClick={() => openEditPetModal(pet)} style={{flex: 1, padding: "8px", background: "#F5F5F5", color: "#333", border: "1px solid #ddd", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: "bold"}}>✏ Edit</button>
+                                                <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{flex: 1, padding: "8px", background: "#ffebee", color: "red", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: "bold"}}>🗑 Delete</button>
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
                             ))}
                         </div>
@@ -731,11 +730,11 @@ const OwnerDashboard = () => {
                 </div>
             )}
 
-            {/* --- APPOINTMENTS TAB (UPDATED FOR MOBILE SUB-TABS) --- */}
+            {/* --- APPOINTMENTS TAB --- */}
             {activeTab === "appointments" && (
                 <div style={{ height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
                     
-                    {/* MOBILE TOGGLE BUTTONS (Only visible on mobile) */}
+                    {/* MOBILE TOGGLE BUTTONS */}
                     {isMobile && (
                         <div style={{display: "flex", marginBottom: "15px", background: "white", padding: "5px", borderRadius: "12px", boxShadow: "0 2px 5px rgba(0,0,0,0.05)", flexShrink: 0}}>
                             <button 
@@ -769,7 +768,7 @@ const OwnerDashboard = () => {
                         overflow: "hidden" 
                     }}>
                         
-                        {/* LEFT SIDE: Request Appointment (Show if Desktop OR (Mobile & Tab is Request)) */}
+                        {/* LEFT SIDE: Request Appointment */}
                         {(!isMobile || apptSubTab === "request") && (
                             <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "20px", boxSizing: "border-box" }}>
                                 <h3 style={{marginTop:0}}>Request Appointment</h3>
@@ -787,7 +786,7 @@ const OwnerDashboard = () => {
                             </div>
                         )}
 
-                        {/* RIGHT SIDE: My Appointments (Show if Desktop OR (Mobile & Tab is List)) */}
+                        {/* RIGHT SIDE: My Appointments */}
                         {(!isMobile || apptSubTab === "list") && (
                             <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", padding: "20px", boxSizing: "border-box" }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", borderBottom: "1px solid #eee", paddingBottom: "10px", flexShrink: 0 }}>
@@ -830,21 +829,35 @@ const OwnerDashboard = () => {
                 </div>
             )}
             
-            {/* --- CHAT TAB --- */}
+            {/* --- CHAT TAB (FIXED VISIBILITY) --- */}
             {activeTab === "chat" && (
                 <div style={{ flex: 1, overflow: "hidden", display: "flex", justifyContent: "center" }}>
                     <div className="card" style={{ height: "100%", width: "100%", maxWidth: "800px", display:"flex", flexDirection:"column", padding: "0", boxSizing: "border-box" }}>
                         <div style={{padding:"20px", borderBottom:"1px solid #eee", background:"#f8f9fa", borderRadius:"12px 12px 0 0", flexShrink: 0}}><h3 style={{margin:0}}>💬 Chat with Clinic Staff</h3></div>
-                        <div className="chat-messages" style={{flex: 1, overflowY: "auto", padding: "25px"}}>
+                        
+                        {/* Added display:flex and flexDirection:column here to ensure messages stack correctly */}
+                        <div className="chat-messages" style={{flex: 1, overflowY: "auto", padding: "25px", display: "flex", flexDirection: "column"}}>
                             {chatMessages.map(msg => {
                                  const dateObj = msg.createdAt?.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt);
                                  const timeString = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                 const isMe = msg.senderId === user.uid;
+                                 
                                  return (
-                                     <div key={msg.id} className={`chat-bubble ${msg.senderId === user.uid ? "bubble-me" : "bubble-other"}`} style={{position:"relative"}}>
+                                     <div key={msg.id} style={{
+                                        alignSelf: isMe ? "flex-end" : "flex-start",
+                                        background: isMe ? "#2196F3" : "#e0e0e0", // Blue for you, Grey for others
+                                        color: isMe ? "white" : "black",
+                                        padding: "10px 15px",
+                                        borderRadius: "20px",
+                                        maxWidth: "75%",
+                                        marginBottom: "10px",
+                                        position: "relative",
+                                        wordWrap: "break-word"
+                                     }}>
                                         {msg.text}
                                         {msg.isEdited && <span style={{fontSize:"10px", fontStyle:"italic", marginLeft:"5px", opacity: 0.7}}>(edited)</span>}
-                                        <div style={{fontSize:"10px", marginTop:"5px", textAlign:"right", opacity:0.7}}>{timeString}</div>
-                                        {msg.senderId === user.uid && (
+                                        <div style={{fontSize:"10px", marginTop:"5px", textAlign:"right", opacity:0.7, color: isMe ? "#e3f2fd" : "#666"}}>{timeString}</div>
+                                        {isMe && (
                                             <div onClick={() => handleStartEdit(msg)} style={{position:"absolute", top:"-5px", right:"-5px", background:"#ddd", borderRadius:"50%", width:"15px", height:"15px", fontSize:"10px", textAlign:"center", cursor:"pointer", color:"black"}}>✎</div>
                                         )}
                                      </div>
