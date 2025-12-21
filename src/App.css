@@ -129,12 +129,29 @@ input, select, textarea {
   margin: 8px 0;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
-  background: #f9f9f9;
+  
+  /* FORCE COLORS HERE */
+  background-color: #f9f9f9 !important;
+  color: #333333 !important; /* Forces dark text */
+  
   font-family: inherit;
   box-sizing: border-box;
+
+  /* IPHONE FIX: Removes the default "glass" look on iOS */
+  -webkit-appearance: none;
+  appearance: none;
 }
+
 input:focus, select:focus, textarea:focus {
-  outline: none; border-color: #2196F3; background: white;
+  outline: none; 
+  border-color: #2196F3; 
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+/* Also fix the Date Picker specifically if you use one */
+input[type="date"], input[type="datetime-local"] {
+  color-scheme: light; /* Forces the internal calendar popup to be light mode */
 }
 
 .action-btn {
@@ -438,4 +455,143 @@ tr:hover td { background: #fafafa; }
   font-size: 2.5rem;
   color: #2c3e50;
   margin-bottom: 40px;
+}
+/* =========================
+   MOBILE RESPONSIVE FIXES
+   ========================= */
+@media (max-width: 768px) {
+
+  /* Navbar */
+  .navbar {
+    padding: 10px 15px;
+  }
+
+  .logo {
+    font-size: 18px;
+  }
+
+  /* Main content */
+  .main-content {
+    padding: 15px;
+  }
+
+  /* Cards */
+  .card-grid {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+
+  .card,
+  .stat-card {
+    padding: 15px;
+  }
+
+  /* Tabs */
+  .tab-container {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .tab-btn {
+    white-space: nowrap;
+    padding: 8px 14px;
+    font-size: 14px;
+  }
+
+  /* Tables */
+  table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  /* --- TABLE WRAPPER FOR MOBILE --- */
+  .table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  }
+
+  /* Chat */
+  .chat-layout {
+    grid-template-columns: 1fr;
+    height: calc(100vh - 120px);
+  }
+
+  .chat-sidebar {
+    display: none;
+  }
+
+  /* Auth pages */
+  .auth-card {
+    padding: 25px;
+    margin: 15px;
+  }
+
+  /* Hero section */
+  .hero-section {
+    flex-direction: column;
+    padding: 80px 20px;
+    text-align: center;
+  }
+
+  .hero-content h1 {
+    font-size: 2.2rem;
+  }
+
+  .hero-content p {
+    font-size: 1rem;
+  }
+
+  .hero-image {
+    font-size: 70px;
+    margin-top: 30px;
+  }
+}
+
+/* =========================
+   OWNER DASHBOARD – MOBILE
+   ========================= */
+@media (max-width: 768px) {
+
+  /* Reduce visual density */
+  h2, h3 {
+    font-size: 1.2rem;
+  }
+
+  /* Full-width buttons for owners */
+  .action-btn {
+    width: 100%;
+    margin-top: 10px;
+  }
+
+  /* Tables */
+  table {
+    display: block;
+    white-space: nowrap;
+  }
+
+  /* Chat mobile behavior */
+  .chat-layout {
+    grid-template-columns: 1fr;
+    height: calc(100vh - 140px);
+  }
+
+  .chat-sidebar {
+    display: none;
+  }
+}
+.chat-input-bar {
+  display: flex;
+  gap: 10px;
+  padding: 15px;
+  border-top: 1px solid #eee;
+  background: white;
+  flex-shrink: 0;
+}
+:root {
+  color-scheme: light;
+}
+
+body {
+  background-color: white;
+  color: black;
 }
