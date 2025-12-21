@@ -3,8 +3,6 @@ import { auth, db } from "./firebase";
 import { signOut, updatePassword } from "firebase/auth";
 import { collection, addDoc, query, where, onSnapshot, orderBy, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
-import Calendar from 'react-calendar';
-import 'react-calendar/dist/Calendar.css';
 import logoImg from "./assets/logo.png";
 
 // --- PREDEFINED BREED LISTS ---
@@ -99,7 +97,14 @@ const OwnerDashboard = () => {
 
   // --- RESCHEDULE STATE ---
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
-  const [rescheduleData, setRescheduleData] = useState({ id: null, date: new Date(), time: "08:00" });
+  const [rescheduleData, setRescheduleData] = useState({ id: null, date: "", time: "08:00" });
+
+  // --- LOGOUT CONFIRMATION STATE ---
+  const [confirmModal, setConfirmModal] = useState({ 
+      show: false, 
+      message: "", 
+      onConfirm: () => {} 
+  });
 
   // Profile Data
   const [profileData, setProfileData] = useState({ firstName: "", lastName: "", email: "", phone: "", address: "" });
@@ -117,7 +122,7 @@ const OwnerDashboard = () => {
   const [medicalHistory, setMedicalHistory] = useState("");
   
   const [selectedPetId, setSelectedPetId] = useState("");
-  const [apptDate, setApptDate] = useState(new Date());
+  const [apptDate, setApptDate] = useState("");
   const [apptTime, setApptTime] = useState("08:00");
 
   // --- LISTENER TO DETECT MOBILE SCREEN ---
@@ -297,9 +302,8 @@ const OwnerDashboard = () => {
       printWindow.document.write('</head><body>');
       
       printWindow.document.write('<div class="header">');
-      printWindow.document.write('<h1>Marawi Veterinary Clinic</h1>');
-      printWindow.document.write('<p>Marawi City, Lanao Del Sur | Phone: (123) 456-7890</p>');
-      printWindow.document.write('<h2>Medical Record & Prescription</h2>');
+      printWindow.document.write('<h1>PawPals Clinic</h1>');
+      printWindow.document.write('<p>Veterinary Medical Record</p>');
       printWindow.document.write('</div>');
 
       printWindow.document.write('<div class="section"><p><span class="label">Patient Name:</span> ' + record.petName + '</p>');
@@ -320,7 +324,6 @@ const OwnerDashboard = () => {
       printWindow.document.write('<p>' + (record.medicine || "No medications prescribed.") + '</p></div>');
 
       printWindow.document.write('<div class="section"><p><span class="label">Veterinarian Notes:</span> ' + (record.notes || "N/A") + '</p></div>');
-
       printWindow.document.write('<div class="footer">This document is a computer-generated medical record from PawPals System.</div>');
       
       printWindow.document.write('</body></html>');
@@ -329,9 +332,15 @@ const OwnerDashboard = () => {
   };
 
   const openRescheduleModal = (appt) => {
+      // Convert formatted date string back to YYYY-MM-DD for input
+      const d = new Date(appt.date);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      
       setRescheduleData({
           id: appt.id,
-          date: new Date(appt.date),
+          date: `${year}-${month}-${day}`,
           time: appt.time
       });
       setShowRescheduleModal(true);
@@ -351,7 +360,7 @@ const OwnerDashboard = () => {
         if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
         if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-        const formattedDate = rescheduleData.date.toDateString();
+        const formattedDate = rescheduleData.date
         const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", rescheduleData.time));
         const snapshot = await getDocs(qConflict);
         const hasConflict = snapshot.docs.some(doc => {
@@ -480,6 +489,7 @@ const OwnerDashboard = () => {
   const handleBookAppointment = async (e) => {
       e.preventDefault();
       if (!selectedPetId) return showToast("Please add a pet first!", "error");
+      if (!apptDate) return showToast("Please select a date.", "error");
       
       if (isSaving) return; 
       setIsSaving(true);
@@ -494,7 +504,7 @@ const OwnerDashboard = () => {
         if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
         const pet = myPets.find(p => p.id === selectedPetId);
-        const formattedDate = apptDate.toDateString();
+        const formattedDate = apptDate; // Consistent format
 
         const qConflict = query(collection(db, "appointments"), where("date", "==", formattedDate), where("time", "==", apptTime));
         const snapshot = await getDocs(qConflict);
@@ -508,6 +518,9 @@ const OwnerDashboard = () => {
         });
         showToast("Appointment Requested!");
         setApptFilter("Pending");
+        // Reset form
+        setApptDate("");
+        setApptTime("08:00");
       } catch (error) {
         showToast(error.message, "error");
       } finally {
@@ -534,35 +547,12 @@ const OwnerDashboard = () => {
       }); 
 
       setChatInput(""); 
-
-      // --- AUTO-REPLY LOGIC ---
-      const lastMsg = chatMessages[chatMessages.length - 1];
-      const isStartOfConversation = chatMessages.length === 0;
-      let shouldTriggerBot = false;
-
-      if (isStartOfConversation) {
-          shouldTriggerBot = true;
-      } else {
-          const lastWasStaff = lastMsg.senderId !== user.uid && lastMsg.senderId !== "AI_BOT";
-          const lastMsgTime = lastMsg.createdAt?.toDate ? lastMsg.createdAt.toDate() : new Date(lastMsg.createdAt);
-          const now = new Date();
-          const diffInHours = (now - lastMsgTime) / (1000 * 60 * 60);
-          if (lastWasStaff || diffInHours >= 2) shouldTriggerBot = true;
-      }
-
-      if (shouldTriggerBot) {
-          setTimeout(async () => {
-              await addDoc(collection(db, "messages"), {
-                  text: "Thank you for contacting us! Our staff has been notified and will reply shortly.",
-                  senderId: "AI_BOT", senderName: "PawPals Assistant", receiverId: user.uid, createdAt: new Date(), participants: [user.uid], type: "chat", read: true
-              });
-          }, 1000);
-      }
   };
 
-  const handleLogout = async () => { await signOut(auth); navigate("/"); };
+  const handleLogout = () => { setConfirmModal({show: true, message: "Are you sure you want to log out?", onConfirm: async () => {await signOut(auth); navigate("/");}
+    }); 
+  };
 
-  // --- CALCULATE UNREAD MESSAGES FOR RED DOT ---
   const incomingMsgCount = chatMessages.filter(m => m.senderId !== user?.uid && !m.read).length;
   
   const getTabStyle = (name) => ({ 
@@ -579,6 +569,16 @@ const OwnerDashboard = () => {
       width: "100%", 
       textAlign: "center"
   });
+
+  const getStatusColor = (status) => {
+    switch(status) {
+        case 'Approved': return '#4CAF50';
+        case 'Pending': return '#FF9800';
+        case 'Cancelled': return '#f44336';
+        case 'Done': return '#2196F3';
+        default: return '#999';
+    }
+  };
 
   if (!user) return <div style={{padding:"50px", textAlign:"center"}}>Loading user data...</div>;
 
@@ -600,20 +600,7 @@ const OwnerDashboard = () => {
                         <h4 style={{ margin: "0 0 10px 0", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>Notifications</h4>
                         <div style={{ maxHeight: "300px", overflowY: "auto" }}>
                             {notifications.length === 0 ? <p style={{color:"#888"}}>No updates.</p> : notifications.map(n => (
-                                <div 
-                                    key={n.id} 
-                                    onClick={() => handleNotificationClick(n)}
-                                    style={{
-                                        padding:"10px", 
-                                        borderBottom:"1px solid #f0f0f0", 
-                                        fontSize:"14px", 
-                                        background: n.isSeenByOwner ? "white" : "#e3f2fd",
-                                        cursor: "pointer",
-                                        transition: "background 0.2s"
-                                    }}
-                                    onMouseOver={(e) => e.currentTarget.style.background = "#f5f5f5"}
-                                    onMouseOut={(e) => e.currentTarget.style.background = n.isSeenByOwner ? "white" : "#e3f2fd"}
-                                >
+                                <div key={n.id} onClick={() => handleNotificationClick(n)} style={{ padding:"10px", borderBottom:"1px solid #f0f0f0", fontSize:"14px", background: n.isSeenByOwner ? "white" : "#e3f2fd", cursor: "pointer", transition: "background 0.2s" }} onMouseOver={(e) => e.currentTarget.style.background = "#f5f5f5"} onMouseOut={(e) => e.currentTarget.style.background = n.isSeenByOwner ? "white" : "#e3f2fd"} >
                                     {n.text}
                                 </div>
                             ))}
@@ -622,7 +609,6 @@ const OwnerDashboard = () => {
                     </div>
                 )}
             </div>
-            <button onClick={() => { setActiveTab("profile"); setShowNotifDropdown(false); }} style={{ background: activeTab === "profile" ? "#e3f2fd" : "none", border: "none", fontSize: "24px", cursor: "pointer", borderRadius: "50%", padding: "5px" }} title="My Profile">👤</button>
             <button onClick={handleLogout} className="action-btn" style={{background: "#ffebee", color: "#d32f2f"}}>Logout</button>
         </div>
       </nav>
@@ -631,100 +617,100 @@ const OwnerDashboard = () => {
       <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         
         {/* --- Tab Grid --- */}
-        <div style={{ 
-            display: "grid", 
-            gridTemplateColumns: "repeat(3, 1fr)", 
-            gap: "20px", 
-            marginBottom: "20px", 
-            flexShrink: 0 
-        }}>
-          <button style={getTabStyle("pets")} onClick={() => setActiveTab("pets")}>🐶 My Pets</button>
-          <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>📅 Appointments</button>
-          <button style={getTabStyle("chat")} onClick={() => setActiveTab("chat")}>💬 Message Clinic {incomingMsgCount > 0 && <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px"}}>{incomingMsgCount}</span>}</button>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "20px", marginBottom: "20px", flexShrink: 0 }}>
+          <button style={getTabStyle("pets")} onClick={() => setActiveTab("pets")}>My Pets</button>
+          <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>Appointments</button>
+          <button style={getTabStyle("chat")} onClick={() => setActiveTab("chat")}>Messages {incomingMsgCount > 0 && <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px"}}>{incomingMsgCount}</span>}</button>
+          <button style={getTabStyle("profile")} onClick={() => setActiveTab("profile")}>My Profile</button>
         </div>
 
         {/* --- DYNAMIC CONTENT WRAPPER --- */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
 
+            {/* --- PROFILE TAB --- */}
             {activeTab === "profile" && (
-                <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "30px", alignItems: "center", paddingRight: "10px" }}>
-                    <div className="card" style={{ width: "100%", maxWidth: "800px", borderTop: "5px solid #2196F3" }}>
-                        <h3 style={{marginTop:0, borderBottom:"1px solid #eee", paddingBottom:"10px"}}>👤 Owner Information</h3>
-                        <form onSubmit={handleSaveProfile} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
-                            <div>
-                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>First Name</label>
-                                <input type="text" value={profileData.firstName} onChange={(e) => setProfileData({...profileData, firstName: e.target.value})} required style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
-                            </div>
-                            <div>
-                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Last Name</label>
-                                <input type="text" value={profileData.lastName} onChange={(e) => setProfileData({...profileData, lastName: e.target.value})} required style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
-                            </div>
-                            <div>
-                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Email Address</label>
-                                <input type="email" value={profileData.email || user.email || ""} readOnly disabled title="Email cannot be changed here." style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px", background: "#f0f0f0", color: "#666", cursor: "not-allowed"}} />
-                            </div>
-                            <div>
-                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Phone Number</label>
-                                <input type="text" value={profileData.phone} onChange={(e) => setProfileData({...profileData, phone: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
-                            </div>
-                            
-                            <div style={{ gridColumn: "1 / -1", background:"#e3f2fd", padding:"10px", borderRadius:"8px", border:"1px solid #90caf9" }}>
-                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#1565C0" }}>Change Password (Optional)</label>
-                                <input 
-                                    type="password" 
-                                    placeholder="Enter new password to change..."
-                                    value={newPassword} 
-                                    onChange={(e) => setNewPassword(e.target.value)} 
-                                    style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #90caf9", borderRadius:"5px"}} 
-                                />
-                                <div style={{fontSize:"11px", color:"#555", marginTop:"5px"}}>* Leave blank if you don't want to change it.</div>
-                            </div>
-
-                            <div style={{ gridColumn: "1 / -1" }}>
-                                <label style={{ fontSize: "12px", fontWeight: "bold", color:"#555" }}>Address</label>
-                                <input type="text" value={profileData.address} onChange={(e) => setProfileData({...profileData, address: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", border:"1px solid #ccc", borderRadius:"5px"}} />
-                            </div>
-                            <div style={{ gridColumn: "1 / -1", marginTop: "10px" }}><button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", width: "100%", padding: "12px" }}>
-                                {isSaving ? "Saving..." : "💾 Save Owner Details"}
-                            </button></div>
-                        </form>
-                    </div>
+                <div className="card" style={{ width: "100%", height: "100%", padding: "30px", boxSizing: "border-box", overflowY: "auto" }}>
+                     <h3 style={{marginTop:0, borderBottom:"1px solid #eee", paddingBottom:"10px", color: "#2196F3"}}>👤 Edit Profile</h3>
+                     <form onSubmit={handleSaveProfile} style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", maxWidth: "800px", margin: "0 auto" }}>
+                        <div>
+                            <label style={{ fontSize: "14px", fontWeight: "bold", color:"#555" }}>First Name</label>
+                            <input type="text" value={profileData.firstName} onChange={(e) => setProfileData({...profileData, firstName: e.target.value})} required style={{width:"100%", padding:"12px", marginTop:"5px", border:"1px solid #ddd", borderRadius:"8px", fontSize: "14px"}} />
+                        </div>
+                        <div>
+                            <label style={{ fontSize: "14px", fontWeight: "bold", color:"#555" }}>Last Name</label>
+                            <input type="text" value={profileData.lastName} onChange={(e) => setProfileData({...profileData, lastName: e.target.value})} required style={{width:"100%", padding:"12px", marginTop:"5px", border:"1px solid #ddd", borderRadius:"8px", fontSize: "14px"}} />
+                        </div>
+                        <div>
+                            <label style={{ fontSize: "14px", fontWeight: "bold", color:"#555" }}>Email Address</label>
+                            <input type="email" value={profileData.email || user.email || ""} readOnly disabled style={{width:"100%", padding:"12px", marginTop:"5px", border:"1px solid #ddd", borderRadius:"8px", background: "#f9f9f9", color: "#666"}} />
+                        </div>
+                        <div>
+                            <label style={{ fontSize: "14px", fontWeight: "bold", color:"#555" }}>Phone Number</label>
+                            <input type="text" value={profileData.phone} onChange={(e) => setProfileData({...profileData, phone: e.target.value})} style={{width:"100%", padding:"12px", marginTop:"5px", border:"1px solid #ddd", borderRadius:"8px", fontSize: "14px"}} />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1" }}>
+                            <label style={{ fontSize: "14px", fontWeight: "bold", color:"#555" }}>Home Address</label>
+                            <input type="text" value={profileData.address} onChange={(e) => setProfileData({...profileData, address: e.target.value})} style={{width:"100%", padding:"12px", marginTop:"5px", border:"1px solid #ddd", borderRadius:"8px", fontSize: "14px"}} />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1", background:"#e3f2fd", padding:"20px", borderRadius:"8px", border:"1px solid #bbdefb" }}>
+                            <label style={{ fontSize: "14px", fontWeight: "bold", color:"#1565C0" }}>Change Password (Optional)</label>
+                            <input type="password" placeholder="Enter new password to update..." value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{width:"100%", padding:"12px", marginTop:"8px", border:"1px solid #90caf9", borderRadius:"8px", background:"white"}} />
+                            <div style={{fontSize:"12px", color:"#555", marginTop:"5px"}}>Leave blank if you don't want to change it.</div>
+                        </div>
+                        <div style={{ gridColumn: "1 / -1", marginTop: "10px" }}>
+                            <button type="submit" style={{ background: "#2196F3", color: "white", width: "100%", padding: "15px", borderRadius: "8px", border: "none", fontSize: "16px", fontWeight: "bold", cursor: "pointer" }}>
+                                {isSaving ? "Saving..." : "💾 Save Changes"}
+                            </button>
+                        </div>
+                    </form>
                 </div>
             )}
 
+            {/* --- PETS TAB --- */}
             {activeTab === "pets" && (
-                <div style={{ flex: 1, overflow: "hidden", display: "flex", justifyContent: "center" }}>
-                    <div className="card" style={{ width: "100%", maxWidth: "800px", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px", flexShrink: 0}}>
-                            <h3 style={{margin:0}}>My Pets</h3>
-                            <button onClick={openAddPetModal} style={{background:"#4CAF50", color:"white", border:"none", borderRadius:"30px", padding:"10px 25px", cursor:"pointer", fontWeight: "bold", boxShadow: "0 4px 6px rgba(0,0,0,0.1)"}}>+ Add New Pet</button>
-                        </div>
-                        <input type="text" placeholder="🔍 Pet Search" value={petSearch} onChange={(e) => setPetSearch(e.target.value)} style={{ marginBottom: "15px", borderRadius: "20px", padding: "10px 15px", border: "1px solid #ddd", width: "95%", flexShrink: 0 }} />
-                        <div style={{ flex: 1, overflowY: "auto", paddingRight: "5px" }}>
-                            {filteredPets.length === 0 ? <p style={{color:"#888", textAlign:"center", padding:"20px"}}>No pets found.</p> : filteredPets.map(pet => (
-                                <div key={pet.id} style={{padding:"15px", borderBottom:"1px solid #eee", background: pet.deletionStatus === 'Pending' ? '#ffebee' : '#fff', borderRadius:"8px", marginBottom:"5px", border: "1px solid #f0f0f0", display: "flex", flexDirection: "column", gap: "5px"}}>
-                                    <div style={{display: "flex", alignItems: "center", justifyContent: "space-between"}}>
-                                        <div style={{fontSize:"18px"}}><span style={{marginRight:"10px", fontSize:"24px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span><strong>{pet.name}</strong></div>
-                                    </div>
-                                    
-                                    <div style={{color:"#555", marginLeft:"34px"}}>{pet.species} - {pet.breed} ({pet.age} {pet.ageUnit || "Years"})</div>
-                                    
-                                    {pet.medicalHistory && <div style={{marginLeft: "34px", marginTop: "5px", color: "#555", fontSize: "12px", fontStyle:"italic"}}><strong>Prev. History:</strong> {pet.medicalHistory}</div>}
-                                    
-                                    <div style={{display: "flex", gap: "10px", marginTop: "15px", marginLeft: "34px", flexWrap: "wrap"}}>
-                                        {pet.deletionStatus === 'Pending' ? (
-                                            <div style={{color: "red", fontWeight: "bold", fontSize: "12px", width: "100%", padding: "5px", background: "#ffebee", borderRadius: "4px", textAlign: "center"}}>Deletion Pending Approval</div>
-                                        ) : (
-                                            <>
-                                                <button onClick={() => handleViewHistory(pet)} style={{flex: 1, padding: "8px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: "bold"}}>📄 History</button>
-                                                <button onClick={() => openEditPetModal(pet)} style={{flex: 1, padding: "8px", background: "#F5F5F5", color: "#333", border: "1px solid #ddd", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: "bold"}}>✏ Edit</button>
-                                                <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{flex: 1, padding: "8px", background: "#ffebee", color: "red", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "13px", fontWeight: "bold"}}>🗑 Delete</button>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px", borderBottom:"1px solid #eee", paddingBottom:"15px", flexShrink: 0}}>
+                        <h3 style={{margin:0, color: "#333"}}>My Pets</h3>
+                        <button onClick={openAddPetModal} style={{background:"#4CAF50", color:"white", border:"none", borderRadius:"8px", padding:"10px 20px", cursor:"pointer", fontWeight: "bold", display:"flex", alignItems:"center", gap:"5px"}}>+ Add Pet</button>
+                    </div>
+                    <input type="text" placeholder="🔍 Search your pets..." value={petSearch} onChange={(e) => setPetSearch(e.target.value)} style={{ marginBottom: "20px", borderRadius: "8px", padding: "12px", border: "1px solid #ddd", width: "100%", boxSizing:"border-box" }} />
+                    <div style={{ flex: 1, overflowY: "auto" }}>
+                        {filteredPets.length === 0 ? <p style={{color:"#888", textAlign:"center", padding:"30px"}}>No pets found.</p> : (
+                            <table style={{width: "100%", borderCollapse: "collapse"}}>
+                                <thead>
+                                    <tr style={{textAlign: "left", borderBottom: "2px solid #eee", color: "#666"}}>
+                                        <th style={{padding: "12px"}}>Name</th>
+                                        <th style={{padding: "12px"}}>Info</th>
+                                        <th style={{padding: "12px"}}>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredPets.map(pet => (
+                                        <tr key={pet.id} style={{borderBottom: "1px solid #f9f9f9", background: pet.deletionStatus === 'Pending' ? '#ffebee' : 'transparent'}}>
+                                            <td style={{padding: "15px", fontWeight: "bold", fontSize: "16px"}}>
+                                                <span style={{marginRight:"10px", fontSize:"20px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span>
+                                                {pet.name}
+                                            </td>
+                                            <td style={{padding: "15px", color: "#555"}}>
+                                                <div>{pet.species} - {pet.breed}</div>
+                                                <div style={{fontSize: "12px"}}>{pet.age} {pet.ageUnit} ({pet.gender})</div>
+                                            </td>
+                                            <td style={{padding: "15px"}}>
+                                                {pet.deletionStatus === 'Pending' ? (
+                                                     <span style={{color: "red", fontWeight: "bold", fontSize: "12px", padding: "4px 8px", background: "#ffebee", borderRadius: "4px"}}>Deletion Pending</span>
+                                                ) : (
+                                                    <div style={{display: "flex", gap: "8px"}}>
+                                                        <button onClick={() => handleViewHistory(pet)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: "bold"}}>History</button>
+                                                        <button onClick={() => openEditPetModal(pet)} style={{padding: "6px 12px", background: "none", color: "#666", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Edit</button>
+                                                        <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Delete</button>
+                                                    </div>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        )}
                     </div>
                 </div>
             )}
@@ -732,94 +718,87 @@ const OwnerDashboard = () => {
             {/* --- APPOINTMENTS TAB --- */}
             {activeTab === "appointments" && (
                 <div style={{ height: "100%", overflow: "hidden", display: "flex", flexDirection: "column" }}>
-                    
                     {/* MOBILE TOGGLE BUTTONS */}
                     {isMobile && (
                         <div style={{display: "flex", marginBottom: "15px", background: "white", padding: "5px", borderRadius: "12px", boxShadow: "0 2px 5px rgba(0,0,0,0.05)", flexShrink: 0}}>
-                            <button 
-                                onClick={() => setApptSubTab("request")}
-                                style={{
-                                    flex: 1, padding: "10px", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer", transition: "all 0.2s",
-                                    background: apptSubTab === "request" ? "#2196F3" : "transparent",
-                                    color: apptSubTab === "request" ? "white" : "#666"
-                                }}
-                            >
-                                ➕ Request
-                            </button>
-                            <button 
-                                onClick={() => setApptSubTab("list")}
-                                style={{
-                                    flex: 1, padding: "10px", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer", transition: "all 0.2s",
-                                    background: apptSubTab === "list" ? "#2196F3" : "transparent",
-                                    color: apptSubTab === "list" ? "white" : "#666"
-                                }}
-                            >
-                                📋 My Appointments
-                            </button>
+                            <button onClick={() => setApptSubTab("request")} style={{ flex: 1, padding: "10px", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer", transition: "all 0.2s", background: apptSubTab === "request" ? "#2196F3" : "transparent", color: apptSubTab === "request" ? "white" : "#666" }}>➕ Request</button>
+                            <button onClick={() => setApptSubTab("list")} style={{ flex: 1, padding: "10px", border: "none", borderRadius: "8px", fontWeight: "600", cursor: "pointer", transition: "all 0.2s", background: apptSubTab === "list" ? "#2196F3" : "transparent", color: apptSubTab === "list" ? "white" : "#666" }}>📋 List</button>
                         </div>
                     )}
 
-                    <div style={{ 
-                        display: isMobile ? "block" : "grid", 
-                        gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", 
-                        gap: "20px", 
-                        height: "100%", 
-                        overflow: "hidden" 
-                    }}>
+                    <div style={{ display: isMobile ? "block" : "grid", gridTemplateColumns: isMobile ? "1fr" : "350px 1fr", gap: "20px", height: "100%", overflow: "hidden" }}>
                         
-                        {/* LEFT SIDE: Request Appointment */}
+                        {/* LEFT SIDE: Request Form */}
                         {(!isMobile || apptSubTab === "request") && (
                             <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "20px", boxSizing: "border-box" }}>
-                                <h3 style={{marginTop:0}}>Request Appointment</h3>
-                                <form onSubmit={handleBookAppointment}>
-                                    <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Pet:</label>
-                                    <select value={selectedPetId} onChange={e => setSelectedPetId(e.target.value)} style={{width:"100%", padding:"8px", marginBottom:"10px"}}><option value="">-- Choose --</option>{myPets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
-                                    <label style={{fontSize:"12px", fontWeight:"bold", color:"#555", marginTop:"10px", display:"block"}}>Select Date:</label>
-                                    <div style={{margin:"10px 0"}}><Calendar onChange={setApptDate} value={apptDate} minDate={new Date()} className="custom-calendar" tileDisabled={({ date }) => date.getDay() === 6} /><div style={{fontSize:"11px", color:"red", marginTop:"5px", textAlign:"center"}}>* Clinic is closed on Saturdays</div></div>
-                                    <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Select Time:</label>
-                                    <input type="time" value={apptTime} onChange={e => setApptTime(e.target.value)} required style={{width:"100%", padding:"8px"}} />
-                                    <button type="submit" className="action-btn" style={{background:"#2196F3", color:"white", width:"100%", marginTop:"10px", padding:"10px"}} disabled={isSaving}>
-                                        {isSaving ? "Requesting..." : "Request Schedule"}
+                                <h3 style={{marginTop:0, color: "#2196F3", borderBottom: "1px solid #eee", paddingBottom: "10px"}}>Request Appointment</h3>
+                                
+                                {/* --- ADDED NOTE --- */}
+                                <div style={{background: "#e3f2fd", padding: "10px", borderRadius: "8px", fontSize: "13px", color: "#0d47a1", marginBottom: "15px", borderLeft: "4px solid #2196F3"}}>
+                                    <strong>ℹ️ Note:</strong> The clinic is closed on <strong>Saturdays</strong>. Consultations typically last <strong>30 mins - 1 hr</strong>.
+                                </div>
+
+                                <form onSubmit={handleBookAppointment} style={{display: "flex", flexDirection: "column", gap: "15px"}}>
+                                    <div>
+                                        <label style={{fontSize: "13px", fontWeight: "bold", color: "#555"}}>Select Pet</label>
+                                        <select value={selectedPetId} onChange={(e) => setSelectedPetId(e.target.value)} required style={{width: "100%", padding: "12px", borderRadius: "8px", border: "1px solid #ddd", marginTop: "5px"}}>
+                                            <option value="">-- Choose Pet --</option>
+                                            {myPets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label style={{fontSize: "13px", fontWeight: "bold", color: "#555"}}>Preferred Date</label>
+                                        <input type="date" value={apptDate} onChange={(e) => setApptDate(e.target.value)} required style={{width: "100%", padding: "12px", borderRadius: "8px", border: "1px solid #ddd", marginTop: "5px"}} />
+                                    </div>
+                                    <div>
+                                        <label style={{fontSize: "13px", fontWeight: "bold", color: "#555"}}>Preferred Time</label>
+                                        <input type="time" value={apptTime} onChange={(e) => setApptTime(e.target.value)} required style={{width: "100%", padding: "12px", borderRadius: "8px", border: "1px solid #ddd", marginTop: "5px"}} />
+                                    </div>
+                                    <button type="submit" style={{marginTop: "10px", padding: "15px", background: "#2196F3", color: "white", border: "none", borderRadius: "8px", fontWeight: "bold", cursor: "pointer"}}>
+                                        {isSaving ? "Booking..." : "Submit Request"}
                                     </button>
                                 </form>
                             </div>
                         )}
 
-                        {/* RIGHT SIDE: My Appointments */}
+                        {/* RIGHT SIDE: List */}
                         {(!isMobile || apptSubTab === "list") && (
-                            <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", padding: "20px", boxSizing: "border-box" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", borderBottom: "1px solid #eee", paddingBottom: "10px", flexShrink: 0 }}>
-                                    <h4 style={{margin:0}}>My Appointments</h4>
-                                    <select value={apptFilter} onChange={(e) => setApptFilter(e.target.value)} style={{padding: "8px", borderRadius: "5px", border: "1px solid #ccc", outline: "none", cursor: "pointer"}}>
-                                        <option value="Pending">Pending</option>
-                                        <option value="Approved">Approved</option>
-                                        <option value="Done">Completed</option>
-                                        <option value="Cancelled">Cancelled</option>
-                                    </select>
+                            <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px", boxSizing: "border-box" }}>
+                                <div style={{display: "flex", gap: "10px", marginBottom: "15px", overflowX: "auto", paddingBottom: "5px", borderBottom: "1px solid #eee"}}>
+                                    {["Pending", "Approved", "Done", "Cancelled"].map(filter => (
+                                        <button key={filter} onClick={() => setApptFilter(filter)} style={{padding: "8px 16px", borderRadius: "20px", border: "none", cursor: "pointer", background: apptFilter === filter ? "#2196F3" : "#f1f1f1", color: apptFilter === filter ? "white" : "#555", fontWeight: "bold", fontSize: "13px", whiteSpace: "nowrap"}}>
+                                            {filter}
+                                        </button>
+                                    ))}
                                 </div>
-                                <div style={{ flex: 1, overflowY: "auto" }}>
-                                    {filteredAppointments.length === 0 ? <p style={{color: "#999", textAlign: "center", padding: "20px"}}>No {apptFilter} appointments.</p> : (
-                                        filteredAppointments.map(appt => (
-                                            <div key={appt.id} style={{padding: "15px", marginBottom: "10px", border: "1px solid #eee", borderRadius: "8px", background: "#f9f9f9", borderLeft: appt.status === "Done" ? "5px solid #2196F3" : (appt.status === "Approved" ? "5px solid green" : (appt.status === "Cancelled" ? "5px solid red" : "5px solid orange")), position: "relative"}}>
-                                                <div style={{ display: "flex", justifyContent: "space-between" }}><strong>{appt.petName}</strong><span style={{ fontSize: "12px", color: "#666" }}>{appt.date} @ {appt.time}</span></div>
-                                                <div style={{ fontSize: "14px", color: "#555", margin: "5px 0" }}>
-                                                    <span style={{fontWeight:"bold", fontSize:"12px", padding:"2px 8px", borderRadius:"10px", color:"white", background: appt.status === "Done" ? "#2196F3" : (appt.status === "Approved" ? "green" : (appt.status === "Cancelled" ? "red" : "orange"))}}>{appt.status}</span>
-                                                    <span style={{marginLeft:"10px"}}>Reason: {appt.reason}</span>
-                                                </div>
-                                                {appt.status === "Cancelled" && appt.cancellationReason && (<div style={{fontSize:"12px", color:"red", marginTop:"5px"}}><strong>Cancellation Reason:</strong> {appt.cancellationReason}</div>)}
-                                                {(appt.status === "Approved" || appt.status === "Pending") && (
-                                                    <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                                                        <button onClick={() => openCancelModal(appt.id)} style={{background:"#ffebee", color:"red", border:"1px solid red", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>✖ Cancel</button>
-                                                        <button onClick={() => openRescheduleModal(appt)} style={{background:"#e3f2fd", color:"#1565C0", border:"1px solid #1565C0", borderRadius:"20px", padding:"5px 15px", cursor:"pointer", fontSize:"12px", fontWeight:"bold"}}>📅 Reschedule</button>
+                                <div style={{flex: 1, overflowY: "auto"}}>
+                                    {filteredAppointments.length === 0 ? <p style={{color: "#888", textAlign: "center", marginTop: "40px"}}>No {apptFilter.toLowerCase()} appointments.</p> : (
+                                        <div style={{display: "flex", flexDirection: "column", gap: "10px"}}>
+                                            {filteredAppointments.map(appt => (
+                                                <div key={appt.id} style={{border: "1px solid #eee", borderRadius: "8px", padding: "15px", background: "white", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 2px 4px rgba(0,0,0,0.02)"}}>
+                                                    <div>
+                                                        <div style={{fontWeight: "bold", fontSize: "16px", color: "#333"}}>{appt.petName}</div>
+                                                        <div style={{fontSize: "14px", color: "#666", margin: "4px 0"}}>📅 {appt.date} at {appt.time}</div>
+                                                        <div style={{fontSize: "13px", color: "#888"}}>{appt.reason}</div>
+                                                        <span style={{fontSize: "11px", background: getStatusColor(appt.status), color: "white", padding: "2px 8px", borderRadius: "4px", marginTop: "5px", display: "inline-block"}}>{appt.status}</span>
                                                     </div>
-                                                )}
-                                                {appt.status === "Done" && (
-                                                    <button onClick={() => handleViewMedicalRecord(appt)} style={{marginTop: "10px", background: "#E3F2FD", color: "#2196F3", border: "1px solid #2196F3", borderRadius: "20px", padding: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "bold", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "5px"}}>
-                                                        📄 View Medical Record
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ))
+                                                    <div style={{display: "flex", flexDirection: "column", gap: "5px"}}>
+                                                        {appt.status === "Pending" && (
+                                                            <>
+                                                                <button onClick={() => openRescheduleModal(appt)} style={{padding: "6px 12px", fontSize: "12px", background: "#FF9800", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>Reschedule</button>
+                                                                <button onClick={() => openCancelModal(appt.id)} style={{padding: "6px 12px", fontSize: "12px", background: "#f44336", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>Cancel</button>
+                                                            </>
+                                                        )}
+                                                        {appt.status === "Approved" && (
+                                                            <button onClick={() => openCancelModal(appt.id)} style={{padding: "6px 12px", fontSize: "12px", background: "#f44336", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>Cancel</button>
+                                                        )}
+                                                        {appt.status === "Done" && (
+                                                            <button onClick={() => handleViewMedicalRecord(appt)} style={{padding: "6px 12px", fontSize: "12px", background: "#2196F3", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>View Record</button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
                                     )}
                                 </div>
                             </div>
@@ -827,248 +806,206 @@ const OwnerDashboard = () => {
                     </div>
                 </div>
             )}
-            
-            {/* --- CHAT TAB --- */}
+
+            {/* --- MESSAGES TAB --- */}
             {activeTab === "chat" && (
-                <div style={{ flex: 1, overflow: "hidden", display: "flex", justifyContent: "center" }}>
-                    <div className="card" style={{ height: "100%", width: "100%", maxWidth: "800px", display:"flex", flexDirection:"column", padding: "0", boxSizing: "border-box" }}>
-                        <div style={{padding:"20px", borderBottom:"1px solid #eee", background:"#f8f9fa", borderRadius:"12px 12px 0 0", flexShrink: 0}}><h3 style={{margin:0}}>💬 Chat with Clinic Staff</h3></div>
-                        
-                        <div className="chat-messages" style={{flex: 1, overflowY: "auto", padding: "25px", display: "flex", flexDirection: "column"}}>
-                            {chatMessages.map(msg => {
-                                 const dateObj = msg.createdAt?.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt);
-                                 const timeString = dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                                 const isMe = msg.senderId === user.uid;
-                                 
-                                 return (
-                                     <div key={msg.id} style={{
-                                        alignSelf: isMe ? "flex-end" : "flex-start",
-                                        background: isMe ? "#2196F3" : "#e0e0e0", 
-                                        color: isMe ? "white" : "black",
-                                        padding: "12px 18px", // More padding
-                                        borderRadius: "20px",
-                                        maxWidth: "85%", // Increased slightly for mobile
-                                        marginBottom: "15px", // Increased space between messages so they don't cover each other
-                                        position: "relative",
-                                        wordWrap: "break-word",
-                                        wordBreak: "break-word", // Ensures long words don't overflow
-                                        boxShadow: "0 1px 3px rgba(0,0,0,0.1)"
-                                     }}>
-                                        {msg.text}
-                                        {msg.isEdited && <span style={{fontSize:"10px", fontStyle:"italic", marginLeft:"5px", opacity: 0.7}}>(edited)</span>}
-                                        <div style={{fontSize:"10px", marginTop:"5px", textAlign:"right", opacity:0.7, color: isMe ? "#e3f2fd" : "#666"}}>{timeString}</div>
-                                        {isMe && (
-                                            <div onClick={() => handleStartEdit(msg)} style={{position:"absolute", top:"-5px", right:"-5px", background:"#ddd", borderRadius:"50%", width:"15px", height:"15px", fontSize:"10px", textAlign:"center", cursor:"pointer", color:"black"}}>✎</div>
-                                        )}
-                                     </div>
-                                 );
-                            })}
-                            <div ref={scrollRef}></div>
-                        </div>
-                        <form onSubmit={handleSendMessage} style={{display:"flex", gap:"10px", padding:"20px", background:"white", borderRadius:"0 0 12px 12px", borderTop:"1px solid #eee", flexShrink: 0}}>
-                            {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{background: "#ccc", border: "none", borderRadius: "50%", width: "30px", height: "30px", cursor: "pointer", fontWeight: "bold"}}>✖</button>}
-                            <input type="text" value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="Type a message..." style={{borderRadius:"30px"}} />
-                            <button type="submit" className="action-btn" style={{background: editingMessageId ? "#FF9800" : "#2196F3", color:"white", borderRadius:"30px", padding:"10px 25px"}}>{editingMessageId ? "Update" : "Send"}</button>
-                        </form>
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "0", overflow: "hidden" }}>
+                    <div style={{padding: "15px", background: "#f9f9f9", borderBottom: "1px solid #ddd", fontWeight: "bold", display: "flex", alignItems: "center", gap: "10px"}}>
+                        <span>💬</span> Chat with Clinic Staff
                     </div>
+                    <div style={{flex: 1, padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "15px", background: "white"}}>
+                        {chatMessages.length === 0 && <div style={{textAlign: "center", color: "#ccc", marginTop: "50px"}}>No messages yet. Start conversation below!</div>}
+                        {chatMessages.map(msg => (
+                            <div key={msg.id} style={{alignSelf: msg.senderId === user.uid ? "flex-end" : "flex-start", maxWidth: "70%", display: "flex", flexDirection: "column", alignItems: msg.senderId === user.uid ? "flex-end" : "flex-start"}}>
+                                <div style={{
+                                    background: msg.senderId === user.uid ? "#2196F3" : "#f1f1f1", 
+                                    color: msg.senderId === user.uid ? "white" : "#333", 
+                                    padding: "10px 15px", 
+                                    borderRadius: "18px", 
+                                    borderBottomRightRadius: msg.senderId === user.uid ? "4px" : "18px",
+                                    borderBottomLeftRadius: msg.senderId !== user.uid ? "4px" : "18px",
+                                    fontSize: "14px",
+                                    boxShadow: "0 1px 2px rgba(0,0,0,0.1)"
+                                }}>
+                                    {msg.text}
+                                </div>
+                                <div style={{fontSize: "10px", color: "#999", marginTop: "3px", marginRight: "5px"}}>
+                                    {msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ""}
+                                    {msg.senderId === user.uid && <span onClick={() => handleStartEdit(msg)} style={{marginLeft: "10px", cursor: "pointer", color: "#2196F3"}}>Edit</span>}
+                                </div>
+                            </div>
+                        ))}
+                        <div ref={scrollRef} />
+                    </div>
+                    <form onSubmit={handleSendMessage} style={{padding: "15px", borderTop: "1px solid #eee", background: "white", display: "flex", gap: "10px"}}>
+                        <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type your message..." style={{flex: 1, padding: "12px", borderRadius: "25px", border: "1px solid #ddd", fontSize: "14px", outline: "none"}} />
+                        {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{background: "#999", color: "white", border: "none", padding: "0 20px", borderRadius: "25px", cursor: "pointer"}}>Cancel</button>}
+                        <button type="submit" style={{background: "#2196F3", color: "white", border: "none", padding: "0 25px", borderRadius: "25px", fontWeight: "bold", cursor: "pointer"}}>Send</button>
+                    </form>
                 </div>
             )}
+
         </div>
-
-        {/* --- MODALS --- */}
-        {showPetModal && (
-            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                {/* FIXED: Applied "Medical History" style to this modal (width: 90%, maxWidth: 500px, overflow fixed) */}
-                <div style={{ background: "white", padding: "20px", borderRadius: "15px", width: "90%", maxWidth: "500px", maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", flexShrink: 0 }}>{isEditingPet ? "Edit Pet" : "Add New Pet"}</h3>
-                    
-                    <div style={{ flex: 1, overflowY: "auto", paddingRight: "5px" }}>
-                        <form onSubmit={handlePetSubmit} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                            <input type="text" placeholder="Pet Name" value={petName} onChange={e => setPetName(e.target.value)} required />
-                            <select value={species} onChange={e => { setSpecies(e.target.value); setBreed(""); setOtherBreed(""); }}><option>Dog</option><option>Cat</option><option>Other</option></select>
-                            {species === "Other" && <input type="text" placeholder="Please specify species..." value={otherSpecies} onChange={e => setOtherSpecies(e.target.value)} required style={{background: "#f9f9f9", border: "1px solid #2196F3"}} />}
-                            {["Dog", "Cat"].includes(species) ? (
-                                <select value={breed} onChange={e => setBreed(e.target.value)}><option value="">-- Select Breed --</option>{(species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => <option key={b} value={b}>{b}</option>)}</select>
-                            ) : (<input type="text" placeholder="Breed (Optional)" value={breed} onChange={e => setBreed(e.target.value)} />)}
-                            {breed === "Other" && <input type="text" placeholder="Specify Breed..." value={otherBreed} onChange={e => setOtherBreed(e.target.value)} required style={{background: "#f9f9f9", border: "1px solid #2196F3"}} />}
-                            <div style={{display:"flex", gap:"10px"}}><input type="number" placeholder="Age" value={age} onChange={e => setAge(e.target.value)} required style={{flex: 1}} /><select value={ageUnit} onChange={e => setAgeUnit(e.target.value)} style={{flex: 1}}><option value="Years">Years</option><option value="Months">Months</option></select></div>
-                            <select value={gender} onChange={e => setGender(e.target.value)}><option>Male</option><option>Female</option></select>
-                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555"}}>Medical History (from other clinics):</label>
-                            <textarea rows="3" placeholder="e.g. Vaccinated for Rabies last year..." value={medicalHistory} onChange={e => setMedicalHistory(e.target.value)} style={{width: "100%", padding:"8px", borderRadius:"5px", border:"1px solid #ccc", fontFamily:"inherit"}} />
-                            
-                            {/* Actions moved to bottom of scroll area */}
-                            <div style={{ display: "flex", gap: "10px", marginTop: "15px" }}>
-                                <button type="submit" className="action-btn" style={{ background: "#4CAF50", color: "white", flex: 1 }} disabled={isSaving}>
-                                    {isSaving ? "Saving..." : (isEditingPet ? "Save Changes" : "Add Pet")}
-                                </button>
-                                <button type="button" onClick={() => setShowPetModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }} disabled={isSaving}>Cancel</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        )}
-
-        {showRescheduleModal && (
-            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px" }}>📅 Reschedule Appointment</h3>
-                    <form onSubmit={handleRescheduleSubmit}>
-                        <div style={{margin:"15px 0"}}>
-                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555", display:"block", marginBottom:"5px"}}>Select New Date:</label>
-                            <Calendar 
-                                onChange={(date) => setRescheduleData({...rescheduleData, date})} 
-                                value={rescheduleData.date} 
-                                minDate={new Date()} 
-                                className="custom-calendar" 
-                                tileDisabled={({ date }) => date.getDay() === 6}
-                            />
-                            <div style={{fontSize:"11px", color:"red", marginTop:"5px", textAlign:"center"}}>* Clinic is closed on Saturdays</div>
-                        </div>
-                        <div style={{margin:"15px 0"}}>
-                            <label style={{fontSize:"12px", fontWeight:"bold", color:"#555", display:"block", marginBottom:"5px"}}>Select New Time:</label>
-                            <input type="time" value={rescheduleData.time} onChange={(e) => setRescheduleData({...rescheduleData, time: e.target.value})} required style={{width:"100%", padding:"8px", borderRadius:"5px", border:"1px solid #ccc"}} />
-                        </div>
-                        <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-                            <button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", flex: 1 }} disabled={isSaving}>
-                                {isSaving ? "Updating..." : "Confirm Reschedule"}
-                            </button>
-                            <button type="button" onClick={() => setShowRescheduleModal(false)} className="action-btn" style={{ background: "#ccc", color: "black", flex: 1 }} disabled={isSaving}>Cancel</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        )}
-
-        {showMedicalModal && selectedRecord && (
-            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "400px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", color: "#2196F3", display: "flex", alignItems: "center", gap: "10px" }}>📝 Medical Record</h3>
-                    <div style={{ marginBottom: "20px", color: "#444", fontSize: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
-                        <div style={{paddingBottom: "10px", borderBottom: "1px solid #f0f0f0"}}>
-                            <p style={{margin: "5px 0"}}><strong>Date of Visit:</strong> {selectedRecord.date} @ {selectedRecord.time}</p>
-                            <p style={{margin: "5px 0"}}><strong>Reason for Visit:</strong> {selectedRecord.reason || "N/A"}</p>
-                        </div>
-                        <div>
-                            <p style={{margin: "0 0 5px 0", color: "#2196F3", fontWeight: "bold"}}>Symptoms:</p>
-                            <div style={{background: "#f9f9f9", padding: "8px", borderRadius: "5px", border: "1px solid #eee"}}>{selectedRecord.symptoms || "N/A"}</div>
-                        </div>
-                        <div>
-                            <p style={{margin: "0 0 5px 0", color: "#2196F3", fontWeight: "bold"}}>Diagnosis:</p>
-                            <div style={{background: "#f9f9f9", padding: "8px", borderRadius: "5px", border: "1px solid #eee"}}>{selectedRecord.diagnosis || "N/A"}</div>
-                        </div>
-                        <div>
-                            <p style={{margin: "0 0 5px 0", color: "#2196F3", fontWeight: "bold"}}>Medications Prescribed:</p>
-                            <div style={{background: "#f9f9f9", padding: "8px", borderRadius: "5px", border: "1px solid #eee"}}>{selectedRecord.medicine || "N/A"}</div>
-                        </div>
-                        <div>
-                            <p style={{margin: "0 0 5px 0", color: "#2196F3", fontWeight: "bold"}}>Notes:</p>
-                            <div style={{background: "#f9f9f9", padding: "8px", borderRadius: "5px", border: "1px solid #eee", fontStyle: "italic"}}>{selectedRecord.notes || "N/A"}</div>
-                        </div>
-                    </div>
-                    <button onClick={() => handlePrintRecord(selectedRecord)} className="action-btn" style={{ background: "#FF9800", color: "white", width: "100%", padding: "12px", marginBottom: "10px", display:"flex", justifyContent:"center", gap:"5px" }}>🖨️ Print Prescription</button>
-                    
-                    <button onClick={() => setShowMedicalModal(false)} className="action-btn" style={{ background: "#2196F3", color: "white", width: "100%", padding: "12px" }}>Close Record</button>
-                </div>
-            </div>
-        )}
-
-        {showHistoryModal && historyPet && (
-            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "20px", borderRadius: "15px", width: "90%", maxWidth: "500px", maxHeight: "85vh", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <div style={{borderBottom: "1px solid #eee", paddingBottom: "10px", marginBottom: "10px", display: "flex", justifyContent: "space-between", alignItems: "center"}}>
-                        <h3 style={{ margin: 0, color: "#2196F3", fontSize: "18px" }}>📜 History: {historyPet.name}</h3>
-                        <button onClick={() => setShowHistoryModal(false)} style={{background:"none", border:"none", fontSize:"20px", cursor:"pointer", color:"#999"}}>✖</button>
-                    </div>
-                    
-                    <div style={{ flex: 1, overflowY: "auto", paddingRight: "5px" }}>
-                        {myAppointments.filter(a => a.petId === historyPet.id && a.status === "Done").length === 0 ? (
-                            <div style={{textAlign: "center", padding: "30px", color: "#999", fontStyle: "italic", fontSize: "14px"}}>
-                                No completed check-up records found.
-                            </div>
-                        ) : (
-                            myAppointments
-                                .filter(a => a.petId === historyPet.id && a.status === "Done")
-                                .sort((a, b) => new Date(b.date) - new Date(a.date))
-                                .map(record => (
-                                    <div key={record.id} style={{background: "#f9f9f9", borderRadius: "8px", padding: "10px", marginBottom: "10px", border: "1px solid #eee", boxShadow: "0 2px 4px rgba(0,0,0,0.02)"}}>
-                                        <div style={{display: "flex", justifyContent: "space-between", marginBottom: "8px", borderBottom: "1px solid #e0e0e0", paddingBottom: "5px"}}>
-                                            <span style={{fontWeight: "bold", color: "#444", fontSize: "14px"}}>📅 {record.date}</span>
-                                            <span style={{fontSize: "11px", color: "#777"}}>{record.time}</span>
-                                        </div>
-                                        <div style={{fontSize: "13px", color: "#555", display: "flex", flexDirection: "column", gap: "4px"}}>
-                                            <div><strong>Reason:</strong> {record.reason || "N/A"}</div>
-                                            <div><strong>Diagnosis:</strong> {record.diagnosis || "N/A"}</div>
-                                            <div><strong>Rx:</strong> {record.medicine || "N/A"}</div>
-                                        </div>
-                                        <button onClick={() => handlePrintRecord(record)} style={{marginTop:"8px", padding:"4px 8px", fontSize:"11px", cursor:"pointer", border:"1px solid #FF9800", background:"#fff3e0", color:"#e65100", borderRadius:"4px", width: "100%"}}>🖨️ Print / View Details</button>
-                                    </div>
-                                ))
-                        )}
-                    </div>
-
-                    <div style={{marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #eee"}}>
-                        <button onClick={() => setShowHistoryModal(false)} className="action-btn" style={{ background: "#ccc", color: "#333", width: "100%", padding: "10px" }}>Close History</button>
-                    </div>
-                </div>
-            </div>
-        )}
-
-        {showDeleteModal && (
-            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", color: "red" }}>⚠️ Request Deletion</h3>
-                    <p style={{fontSize: "14px", color: "#555"}}>Why do you want to delete <strong>{deleteData.name}</strong>?<br/>(This requires Admin approval)</p>
-                    <form onSubmit={handleConfirmDelete}>
-                        <textarea 
-                            rows="3" 
-                            placeholder="Reason..." 
-                            value={deleteData.reason} 
-                            onChange={e => setDeleteData({...deleteData, reason: e.target.value})} 
-                            required 
-                            style={{width: "100%", padding:"10px", borderRadius:"5px", border:"1px solid #ccc", marginBottom: "15px", fontFamily:"inherit"}} 
-                        />
-                        <div style={{ display: "flex", gap: "10px" }}>
-                            <button type="submit" className="action-btn" style={{ background: isSaving ? "#ccc" : "#d32f2f", color: "white", flex: 1 }} disabled={isSaving}>
-                                {isSaving ? "Sending..." : "Submit Request"}
-                            </button>
-                            <button type="button" onClick={() => setShowDeleteModal(false)} className="action-btn" style={{ background: "#eee", color: "#333", flex: 1 }} disabled={isSaving}>
-                                Cancel
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        )}
-
-        {showCancelModal && (
-            <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                <div style={{ background: "white", padding: "30px", borderRadius: "15px", width: "350px", boxShadow: "0 10px 30px rgba(0,0,0,0.2)" }}>
-                    <h3 style={{ marginTop: 0, borderBottom: "1px solid #eee", paddingBottom: "10px", color: "orange" }}>✖ Cancel Appointment</h3>
-                    <p style={{fontSize: "14px", color: "#555"}}>Please provide a reason for cancellation:</p>
-                    <form onSubmit={handleConfirmCancel}>
-                        <textarea 
-                            rows="3" 
-                            placeholder="Reason..." 
-                            value={cancelData.reason} 
-                            onChange={e => setCancelData({...cancelData, reason: e.target.value})} 
-                            required 
-                            style={{width: "100%", padding:"10px", borderRadius:"5px", border:"1px solid #ccc", marginBottom: "15px", fontFamily:"inherit"}} 
-                        />
-                        <div style={{ display: "flex", gap: "10px" }}>
-                            <button type="submit" className="action-btn" style={{ background: isSaving ? "#ccc" : "#d32f2f", color: "white", flex: 1 }} disabled={isSaving}>
-                                {isSaving ? "Cancelling..." : "Confirm Cancel"}
-                            </button>
-                            <button type="button" onClick={() => setShowCancelModal(false)} className="action-btn" style={{ background: "#eee", color: "#333", flex: 1 }} disabled={isSaving}>
-                                Go Back
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-        )}
-
       </main>
+
+      {/* --- MODALS (Reusing styled overlays) --- */}
+      
+      {/* 1. Add/Edit Pet Modal */}
+      {showPetModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%", boxShadow: "0 10px 30px rgba(0,0,0,0.3)"}}>
+                  <h3 style={{marginTop:0, color: "#333"}}>{isEditingPet ? "Edit Pet" : "Add New Pet"}</h3>
+                  <form onSubmit={handlePetSubmit} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
+                      <input type="text" placeholder="Pet Name" required value={petName} onChange={(e) => setPetName(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} />
+                      <div style={{display:"flex", gap:"10px"}}>
+                        <select value={species} onChange={(e) => setSpecies(e.target.value)} style={{flex:1, padding:"12px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                            <option value="Dog">Dog</option><option value="Cat">Cat</option><option value="Other">Other</option>
+                        </select>
+                        <select value={gender} onChange={(e) => setGender(e.target.value)} style={{flex:1, padding:"12px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                            <option value="Male">Male</option><option value="Female">Female</option>
+                        </select>
+                      </div>
+                      {species === "Other" && <input type="text" placeholder="Specify Species" value={otherSpecies} onChange={(e) => setOtherSpecies(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} />}
+                      
+                      {/* Breed Logic */}
+                      {["Dog", "Cat"].includes(species) ? (
+                          <select value={breed} onChange={(e) => setBreed(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}}>
+                              <option value="">Select Breed</option>
+                              {(species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                      ) : (
+                           <input type="text" placeholder="Breed (Optional)" value={breed} onChange={(e) => setBreed(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} />
+                      )}
+                      {(breed === "Other" && ["Dog", "Cat"].includes(species)) && (
+                          <input type="text" placeholder="Specify Breed" value={otherBreed} onChange={(e) => setOtherBreed(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} />
+                      )}
+
+                      <div style={{display:"flex", gap:"10px"}}>
+                          <input type="number" placeholder="Age" required value={age} onChange={(e) => setAge(e.target.value)} style={{flex:1, padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} />
+                          <select value={ageUnit} onChange={(e) => setAgeUnit(e.target.value)} style={{width:"80px", padding:"12px", borderRadius:"6px", border:"1px solid #ddd"}}><option value="Years">Yrs</option><option value="Months">Mos</option></select>
+                      </div>
+                      <textarea placeholder="Existing Medical History (Optional)" value={medicalHistory} onChange={(e) => setMedicalHistory(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} rows="2" />
+                      
+                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
+                          <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>Save Pet</button>
+                          <button type="button" onClick={() => setShowPetModal(false)} style={{flex:1, background:"#f1f1f1", color:"#333", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
+
+      {/* 2. Cancel Modal */}
+      {showCancelModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"350px"}}>
+                  <h3 style={{marginTop:0}}>Cancel Appointment</h3>
+                  <textarea placeholder="Reason for cancellation..." value={cancelData.reason} onChange={(e) => setCancelData({...cancelData, reason: e.target.value})} style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", boxSizing:"border-box"}} rows="3" />
+                  <div style={{display:"flex", gap:"10px"}}>
+                      <button onClick={handleConfirmCancel} style={{flex:1, background:"#f44336", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Confirm Cancel</button>
+                      <button onClick={() => setShowCancelModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Back</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+       {/* 3. Delete Modal */}
+      {showDeleteModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"350px"}}>
+                  <h3 style={{marginTop:0}}>Delete {deleteData.name}?</h3>
+                  <p style={{fontSize:"13px", color:"#666"}}>To prevent accidental data loss, deletions must be approved by an Admin.</p>
+                  <textarea placeholder="Reason for deletion..." value={deleteData.reason} onChange={(e) => setDeleteData({...deleteData, reason: e.target.value})} style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", boxSizing:"border-box"}} rows="3" />
+                  <div style={{display:"flex", gap:"10px"}}>
+                      <button onClick={handleConfirmDelete} style={{flex:1, background:"#f44336", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Request Delete</button>
+                      <button onClick={() => setShowDeleteModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Back</button>
+                  </div>
+              </div>
+          </div>
+      )}
+      
+      {/* 4. Reschedule Modal */}
+      {showRescheduleModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"350px"}}>
+                  <h3 style={{marginTop:0}}>Reschedule Appointment</h3>
+                  <form onSubmit={handleRescheduleSubmit}>
+                      <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>New Date:</label>
+                      <input type="date" required value={rescheduleData.date} onChange={(e) => setRescheduleData({...rescheduleData, date: e.target.value})} style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", boxSizing:"border-box"}} />
+                      
+                      <label style={{display:"block", marginBottom:"5px", fontWeight:"bold", fontSize:"13px"}}>New Time:</label>
+                      <input type="time" required value={rescheduleData.time} onChange={(e) => setRescheduleData({...rescheduleData, time: e.target.value})} style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", boxSizing:"border-box"}} />
+                      
+                      <div style={{display:"flex", gap:"10px"}}>
+                          <button type="submit" style={{flex:1, background:"#FF9800", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Reschedule</button>
+                          <button type="button" onClick={() => setShowRescheduleModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
+
+      {/* 5. Medical Record Modal */}
+      {showMedicalModal && selectedRecord && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"30px", borderRadius:"12px", width:"500px", maxWidth:"90%", maxHeight:"80vh", overflowY:"auto"}}>
+                  <div style={{textAlign:"center", borderBottom:"1px solid #eee", paddingBottom:"15px", marginBottom:"20px"}}>
+                      <h2 style={{margin:0, color: "#2196F3"}}>Medical Record</h2>
+                      <div style={{fontSize:"14px", color:"#666"}}>{selectedRecord.date}</div>
+                  </div>
+                  <div style={{marginBottom:"15px"}}>
+                      <strong>Diagnosis:</strong>
+                      <div style={{background:"#e3f2fd", color:"#1565C0", padding:"10px", borderRadius:"6px", marginTop:"5px"}}>{selectedRecord.diagnosis || "N/A"}</div>
+                  </div>
+                  <div style={{marginBottom:"15px"}}>
+                      <strong>Treatment / Medicine:</strong>
+                      <div style={{background:"#f5f5f5", padding:"10px", borderRadius:"6px", marginTop:"5px"}}>{selectedRecord.medicine || "N/A"}</div>
+                  </div>
+                  <div style={{marginBottom:"20px"}}>
+                      <strong>Vet Notes:</strong>
+                      <p style={{margin:"5px 0", fontSize:"14px", color:"#555"}}>{selectedRecord.notes || "None"}</p>
+                  </div>
+                  <div style={{display:"flex", gap:"10px"}}>
+                      <button onClick={() => handlePrintRecord(selectedRecord)} style={{flex:1, background:"#607D8B", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>🖨 Print</button>
+                      <button onClick={() => setShowMedicalModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Close</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 6. History Modal */}
+      {showHistoryModal && historyPet && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"500px", maxHeight:"80vh", overflowY:"auto"}}>
+                  <h3 style={{marginTop:0}}>History: {historyPet.name}</h3>
+                  {myAppointments.filter(a => a.petId === historyPet.id && a.status === 'Done').length === 0 ? <p>No completed visits yet.</p> : (
+                      myAppointments.filter(a => a.petId === historyPet.id && a.status === 'Done').map(record => (
+                          <div key={record.id} style={{borderBottom:"1px solid #eee", padding:"10px 0"}}>
+                              <div style={{fontWeight:"bold", color: "#2196F3"}}>{record.date}</div>
+                              <div style={{fontSize:"14px"}}>Diagnosis: {record.diagnosis}</div>
+                              <button onClick={() => { setShowHistoryModal(false); handleViewMedicalRecord(record); }} style={{fontSize:"12px", color:"#2196F3", background:"none", border:"none", padding:0, cursor:"pointer", marginTop:"5px", textDecoration:"underline"}}>View Details</button>
+                          </div>
+                      ))
+                  )}
+                  <button onClick={() => setShowHistoryModal(false)} style={{marginTop:"15px", width:"100%", padding:"10px", background:"#eee", border:"none", borderRadius:"6px", cursor:"pointer"}}>Close</button>
+              </div>
+          </div>
+      )}
+
+      {/* 7. Logout Confirm Modal */}
+      {confirmModal.show && (
+          <div className="modal-overlay" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000}}>
+              <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "350px", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
+                  <h3 style={{margin: "0 0 15px 0", color: "#333"}}>Confirmation</h3>
+                  <p style={{marginBottom: "25px", fontSize: "16px", color: "#666"}}>{confirmModal.message}</p>
+                  <div style={{display: "flex", justifyContent: "center", gap: "15px"}}>
+                      <button onClick={() => setConfirmModal({ ...confirmModal, show: false })} style={{ padding: "10px 20px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Cancel</button>
+                      <button onClick={() => { confirmModal.onConfirm(); setConfirmModal({ ...confirmModal, show: false }); }} style={{ padding: "10px 20px", background: "#f44336", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Yes</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
     </div>
   );
 };

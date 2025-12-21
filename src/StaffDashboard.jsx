@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { auth, db } from "./firebase";
 import { signOut } from "firebase/auth";
 import { collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc, getDocs, where, orderBy } from "firebase/firestore";
@@ -104,37 +104,33 @@ const StaffDashboard = () => {
 
   // Records / Pet List State
   const [petSearch, setPetSearch] = useState("");
+  const [petFilterType, setPetFilterType] = useState("All"); 
   const [viewingPet, setViewingPet] = useState(null); 
 
   // Chat States
   const [selectedChatOwner, setSelectedChatOwner] = useState(null); 
-  const [chatMessages, setChatMessages] = useState([]); 
   const [chatInput, setChatInput] = useState("");
   const [allMessages, setAllMessages] = useState([]);
   const [editingMessageId, setEditingMessageId] = useState(null);
 
-  // --- AUTOMATIC REPORT STATES ---
+  // --- REPORT STATES ---
   const [reportStartDate, setReportStartDate] = useState("");
   const [reportEndDate, setReportEndDate] = useState("");
-  
-  // Stats Containers
-  const [generatedStats, setGeneratedStats] = useState({
-      itemsAdded: 0,
-      itemsUsed: 0,
-      totalAppointments: 0,
-      completedAppointments: 0,
-      cancelledAppointments: 0,
-      // Store lists for details
-      addedLogs: [],
-      usedLogs: [],
-      rangeApps: []
+  const [reportDetailModal, setReportDetailModal] = useState(null);
+
+  // --- CUSTOM CONFIRMATION MODAL STATE ---
+  const [confirmModal, setConfirmModal] = useState({ 
+      show: false, 
+      message: "", 
+      onConfirm: () => {} 
   });
-  const [serviceBreakdown, setServiceBreakdown] = useState({});
-  const [lowStockItems, setLowStockItems] = useState([]);
-  const [expiredItems, setExpiredItems] = useState([]);
-  
-  // Report Detail Modal State
-  const [reportDetailModal, setReportDetailModal] = useState(null); 
+
+  // --- QUICK USAGE MODAL STATE ---
+    const [usageModal, setUsageModal] = useState({ 
+        show: false, 
+        item: null, 
+        qty: 1 
+  });
 
   // --- INVENTORY STATES ---
   const [inventory, setInventory] = useState([]);
@@ -175,6 +171,111 @@ const StaffDashboard = () => {
     return () => { unsubAppts(); unsubChat(); unsubInventory(); unsubLogs(); };
   }, []);
 
+  // --- DERIVED STATE (REPLACING STATE EFFECTS) ---
+  
+  // 1. Inventory Calculations
+  const lowStockItems = useMemo(() => inventory.filter(i => i.quantity <= (i.threshold || 5)), [inventory]);
+  
+  const expiredItems = useMemo(() => {
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      return inventory.filter(i => i.expiryDate && new Date(i.expiryDate) < today);
+  }, [inventory]);
+
+  // 2. Chat Messages Calculation
+  const chatMessages = useMemo(() => {
+    if (!selectedChatOwner) return [];
+    return allMessages.filter(msg => 
+        msg.participants && 
+        msg.participants.includes(selectedChatOwner.id) && 
+        msg.type !== 'notification'
+    );
+  }, [allMessages, selectedChatOwner]);
+
+  // 3. Filtered Pet Records
+  const filteredRecords = useMemo(() => {
+    return allPets.filter(pet => {
+      const owner = owners.find(o => o.id === pet.ownerId);
+      const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.toLowerCase() : "";
+      const searchLower = petSearch.toLowerCase();
+      
+      const matchesSearch = pet.name.toLowerCase().includes(searchLower) || ownerName.includes(searchLower);
+      
+      let matchesType = true;
+      if (petFilterType !== "All") {
+          if (petFilterType === "Other") {
+              matchesType = pet.species !== "Dog" && pet.species !== "Cat";
+          } else {
+              matchesType = pet.species === petFilterType;
+          }
+      }
+      return matchesSearch && matchesType;
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }, [allPets, owners, petSearch, petFilterType]);
+
+  // 4. Report Stats Calculation (Replaces cascading useEffect)
+  const { generatedStats, serviceBreakdown } = useMemo(() => {
+    const emptyStats = {
+        itemsAdded: 0, itemsUsed: 0, totalAppointments: 0,
+        completedAppointments: 0, cancelledAppointments: 0,
+        addedLogs: [], usedLogs: [], rangeApps: []
+    };
+
+    if (!reportStartDate || !reportEndDate) {
+        return { generatedStats: emptyStats, serviceBreakdown: {} };
+    }
+
+    const start = new Date(reportStartDate);
+    const end = new Date(reportEndDate);
+    end.setHours(23, 59, 59, 999);
+
+    let added = 0;
+    let used = 0;
+    const addedLogs = [];
+    const usedLogs = [];
+
+    inventoryLogs.forEach(log => {
+        const logDate = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
+        if (logDate >= start && logDate <= end) {
+            if (log.change > 0) {
+                added += log.change;
+                addedLogs.push({ ...log, date: logDate });
+            } else if (log.change < 0) {
+                used += Math.abs(log.change);
+                usedLogs.push({ ...log, date: logDate, qty: Math.abs(log.change) });
+            }
+        }
+    });
+
+    const rangeApps = appointments.filter(app => {
+        const appDate = new Date(app.date);
+        return appDate >= start && appDate <= end;
+    });
+    
+    const completed = rangeApps.filter(a => a.status === 'Done');
+    const cancelled = rangeApps.filter(a => a.status === 'Cancelled');
+    
+    const breakdown = {};
+    rangeApps.forEach(app => {
+        const type = app.reason || "Other";
+        breakdown[type] = (breakdown[type] || 0) + 1;
+    });
+
+    return {
+        generatedStats: {
+            itemsAdded: added,
+            itemsUsed: used,
+            totalAppointments: rangeApps.length,
+            completedAppointments: completed.length,
+            cancelledAppointments: cancelled.length,
+            addedLogs,
+            usedLogs,
+            rangeApps
+        },
+        serviceBreakdown: breakdown
+    };
+  }, [reportStartDate, reportEndDate, inventoryLogs, appointments]);
+
   // --- AUTO-MARK AS READ LOGIC ---
   useEffect(() => {
     if (activeTab === "messages" && selectedChatOwner) {
@@ -194,72 +295,6 @@ const StaffDashboard = () => {
     }
   }, [activeTab, selectedChatOwner, allMessages]);
 
-  // --- AUTOMATIC REPORT GENERATION LOGIC ---
-  useEffect(() => {
-      // Calculate Low Stock and Expired 
-      const lowStock = inventory.filter(i => i.quantity <= (i.threshold || 5));
-      const today = new Date();
-      today.setHours(0,0,0,0);
-      const expired = inventory.filter(i => i.expiryDate && new Date(i.expiryDate) < today);
-      
-      setLowStockItems(lowStock);
-      setExpiredItems(expired);
-
-      if (reportStartDate && reportEndDate) {
-          const start = new Date(reportStartDate);
-          const end = new Date(reportEndDate);
-          end.setHours(23, 59, 59, 999);
-
-          // 1. Calculate Inventory Stats from Logs
-          let added = 0;
-          let used = 0;
-          const addedLogs = [];
-          const usedLogs = [];
-
-          inventoryLogs.forEach(log => {
-              const logDate = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
-              if (logDate >= start && logDate <= end) {
-                  if (log.change > 0) {
-                      added += log.change;
-                      addedLogs.push({ ...log, date: logDate });
-                  } else if (log.change < 0) {
-                      used += Math.abs(log.change);
-                      usedLogs.push({ ...log, date: logDate, qty: Math.abs(log.change) });
-                  }
-              }
-          });
-
-          // 2. Calculate Appointment Stats
-          const rangeApps = appointments.filter(app => {
-              const appDate = new Date(app.date);
-              return appDate >= start && appDate <= end;
-          });
-          
-          const completed = rangeApps.filter(a => a.status === 'Done');
-          const cancelled = rangeApps.filter(a => a.status === 'Cancelled');
-          
-          // Service Breakdown
-          const breakdown = {};
-          rangeApps.forEach(app => {
-              const type = app.reason || "Other";
-              if (breakdown[type]) breakdown[type]++;
-              else breakdown[type] = 1;
-          });
-
-          setGeneratedStats({
-              itemsAdded: added,
-              itemsUsed: used,
-              totalAppointments: rangeApps.length,
-              completedAppointments: completed.length,
-              cancelledAppointments: cancelled.length,
-              addedLogs,
-              usedLogs,
-              rangeApps
-          });
-          setServiceBreakdown(breakdown);
-      }
-  }, [reportStartDate, reportEndDate, inventoryLogs, appointments, inventory]);
-
 
   // --- DATE NORMALIZER ---
   const normalizeDate = (dateInput) => {
@@ -275,18 +310,10 @@ const StaffDashboard = () => {
   };
 
   // --- HELPERS ---
-  const filteredRecords = allPets.filter(pet => {
-      const owner = owners.find(o => o.id === pet.ownerId);
-      const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.toLowerCase() : "";
-      const searchLower = petSearch.toLowerCase();
-      return pet.name.toLowerCase().startsWith(searchLower) || ownerName.startsWith(searchLower);
-  }).sort((a, b) => a.name.localeCompare(b.name)); 
-
   const getUnreadCount = (ownerId) => allMessages.filter(m => m.senderId === ownerId && !m.read && m.senderId !== "AI_BOT").length;
   
   const totalUnreadMessages = allMessages.filter(m => m.senderId !== auth.currentUser?.uid && !m.read && m.senderId !== "AI_BOT").length;
 
-  // --- INVENTORY HELPERS ---
   const getStockStatus = (item) => {
       if (item.quantity <= 0) return { label: "Out of Stock", color: "#f44336" };
       if (item.quantity <= item.threshold) return { label: "Low Stock", color: "#ff9800" };
@@ -369,7 +396,7 @@ const StaffDashboard = () => {
   // --- ACTIONS ---
   const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
   
-  // --- INVENTORY ACTIONS (UPDATED) ---
+  // --- INVENTORY ACTIONS ---
   const handleOpenAddInventory = () => {
       setEditingInventoryId(null);
       setInventoryData({ name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5 });
@@ -389,51 +416,63 @@ const StaffDashboard = () => {
       setShowInventoryModal(true);
   };
 
-  const handleDeleteInventory = async (id) => {
-      if(window.confirm("Are you sure you want to delete this item? This cannot be undone.")) {
-          try {
-              await deleteDoc(doc(db, "inventory", id));
-              showToast("Item deleted.", "error");
-          } catch (err) {
-              console.error(err);
-              showToast("Error deleting item.", "error");
+    const handleDeleteInventory = (id) => {
+      setConfirmModal({
+          show: true,
+          message: "Are you sure you want to delete this item? This cannot be undone.",
+          onConfirm: async () => {
+              try {
+                  await deleteDoc(doc(db, "inventory", id));
+                  showToast("Item deleted.", "error");
+              } catch (err) {
+                  console.error(err);
+                  showToast("Error deleting item.", "error");
+              }
           }
-      }
+      });
   };
 
-  const handleQuickUsage = async (item) => {
-      const qtyStr = prompt(`How many ${item.unit} of ${item.name} were used/issued?`, "1");
-      if (!qtyStr) return;
-      const qty = parseInt(qtyStr);
-      if (isNaN(qty) || qty <= 0) return showToast("Invalid quantity", "error");
-      
-      if (item.quantity < qty) return showToast("Not enough stock available", "error");
+const handleQuickUsage = (item) => {
+    setUsageModal({
+        show: true,
+        item: item,
+        qty: 1 
+    });
+};
+const confirmQuickUsage = async () => {
+    const { item, qty } = usageModal;
+    if (!item || qty <= 0) return;
 
-      try {
-          await updateDoc(doc(db, "inventory", item.id), {
-              quantity: item.quantity - qty,
-              lastUpdated: new Date()
-          });
-          
-          await addDoc(collection(db, "inventoryLogs"), {
-              itemId: item.id,
-              itemName: item.name,
-              change: -qty, // Negative for usage
-              reason: "Quick Usage",
-              timestamp: new Date()
-          });
-          showToast(`Recorded usage of ${qty} ${item.unit}`);
-      } catch (err) {
-          console.error(err);
-          showToast("Error updating stock", "error");
-      }
+    if (item.quantity < qty) {
+        showToast("Not enough stock available", "error");
+        return;
+    }
+
+    try {
+        await updateDoc(doc(db, "inventory", item.id), {
+            quantity: item.quantity - qty,
+            lastUpdated: new Date()
+        });
+        
+        await addDoc(collection(db, "inventoryLogs"), {
+            itemId: item.id,
+            itemName: item.name,
+            change: -qty,
+            reason: "Quick Usage",
+            timestamp: new Date()
+        });
+        showToast(`Recorded usage of ${qty} ${item.unit}`);
+        setUsageModal({ show: false, item: null, qty: 1 });
+    } catch (err) {
+        console.error(err);
+        showToast("Error updating stock", "error");
+    }
   };
 
   const handleSaveInventory = async (e) => {
       e.preventDefault();
       try {
           if (editingInventoryId) {
-              // Edit Mode
               const oldItem = inventory.find(i => i.id === editingInventoryId);
               const qtyDiff = inventoryData.quantity - oldItem.quantity;
               
@@ -453,13 +492,11 @@ const StaffDashboard = () => {
               }
               showToast("Inventory updated successfully!");
           } else {
-              // Add Mode
               const docRef = await addDoc(collection(db, "inventory"), {
                   ...inventoryData,
                   createdAt: new Date()
               });
               
-              // Log initial stock
               await addDoc(collection(db, "inventoryLogs"), {
                   itemId: docRef.id,
                   itemName: inventoryData.name,
@@ -606,12 +643,24 @@ const StaffDashboard = () => {
       setChatInput("");
   };
 
-  const handleLogout = async () => { await signOut(auth); navigate("/"); };
+  const handleLogout = () => { setConfirmModal ({ show: true, message: "Are you sure want to log out?", onConfirm: async () => {await signOut(auth); navigate("/");
+        }
+    }); 
+};
   
   const handleCreateWalkIn = async (e) => {
       e.preventDefault();
       const selectedDate = new Date(walkInData.date);
       if (selectedDate.getDay() === 6) return showToast("Cannot book on Saturdays. Clinic is closed.", "error");
+
+      // --- CONFLICT CHECK ---
+      const qConflict = query(collection(db, "appointments"), where("date", "==", walkInData.date), where("time", "==", walkInData.time));
+      const snapshot = await getDocs(qConflict);
+      const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled");
+
+      if (hasConflict) {
+          return showToast(`Time slot ${walkInData.time} is already booked!`, "error");
+      }
 
       try {
           await addDoc(collection(db, "appointments"), {
@@ -778,82 +827,70 @@ const StaffDashboard = () => {
   const filteredAppointments = appointments.filter(a => a.status === apptSubTab);
 
   useEffect(() => {
-      if (selectedChatOwner) {
-          const currentMsgs = allMessages.filter(msg => msg.participants && msg.participants.includes(selectedChatOwner.id) && msg.type !== 'notification');
-          setChatMessages(currentMsgs);
-      }
-  }, [selectedChatOwner, allMessages]);
-  
-  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: "smooth" }); }, [chatMessages]);
+    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
 
   return (
     <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
-      
       {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({...toast, show: false})} />}
-
+      
       <nav className="navbar" style={{ flexShrink: 0 }}>
         <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Staff</div>
         <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
-            <div style={{ position: "relative" }}>
-                <button onClick={() => setShowNotifications(!showNotifications)} style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
-                    🔔{unreadCount > 0 && <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>{unreadCount}</span>}
-                </button>
-                {showNotifications && (
-                    <div style={{ position: "absolute", top: "50px", right: "0", width: "320px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
-                        <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px", borderBottom:"1px solid #eee", paddingBottom:"5px"}}>
-                            <h4 style={{ margin: 0 }}>Notifications</h4>
-                            <button onClick={handleMarkAllRead} style={{fontSize:"11px", border:"none", background:"none", color:"#2196F3", cursor:"pointer"}}>Mark all read</button>
-                        </div>
-                        <div style={{ maxHeight: "300px", overflowY: "auto" }}>
-                            {notificationList.length === 0 ? <p style={{color:"#888"}}>No new notifications.</p> : (
-                                notificationList.map((notif, index) => (
-                                    <div key={index} onClick={() => handleNotificationClick(notif)} style={{ padding: "12px", borderBottom: "1px solid #f1f1f1", cursor: "pointer", display: "flex", alignItems: "start", gap: "10px" }}>
-                                        <span style={{ fontSize: "16px" }}>{notif.type === 'appointment' ? '📅' : notif.type === 'message' ? '💬' : '⭐'}</span>
-                                        <div><div style={{ fontSize: "13px", fontWeight: "500", color: "#333" }}>{notif.text}</div></div>
-                                    </div>
-                                )))}
-                        </div>
-                    </div>
-                )}
-            </div>
-            <button onClick={handleLogout} className="action-btn" style={{background: "#ffebee", color: "#d32f2f"}}>Logout</button>
+          
+          <div style={{ position: "relative" }}>
+              <button onClick={() => setShowNotifications(!showNotifications)} style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
+                  🔔{unreadCount > 0 && <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>{unreadCount}</span>}
+              </button>
+              {showNotifications && (
+                  <div style={{ position: "absolute", top: "50px", right: "0", width: "320px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
+                      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px", borderBottom:"1px solid #eee", paddingBottom:"5px"}}>
+                          <h4 style={{ margin: 0 }}>Notifications</h4>
+                          <button onClick={handleMarkAllRead} style={{fontSize:"11px", border:"none", background:"none", color:"#2196F3", cursor:"pointer"}}>Mark all read</button>
+                      </div>
+                      <div style={{ maxHeight: "300px", overflowY: "auto" }}>
+                          {notificationList.length === 0 ? <p style={{color:"#888"}}>No new notifications.</p> : (
+                              notificationList.map((notif, index) => (
+                                  <div key={index} onClick={() => handleNotificationClick(notif)} style={{ padding: "12px", borderBottom: "1px solid #f1f1f1", cursor: "pointer", display: "flex", alignItems: "start", gap: "10px" }}>
+                                      <span style={{ fontSize: "16px" }}>{notif.type === 'appointment' ? '📅' : notif.type === 'message' ? '💬' : '⭐'}</span>
+                                      <div><div style={{ fontSize: "13px", fontWeight: "500", color: "#333" }}>{notif.text}</div></div>
+                                  </div>
+                              )))}
+                      </div>
+                  </div>
+              )}
+          </div>
+          <button onClick={handleLogout} className="action-btn" style={{background: "#ffebee", color: "#d32f2f"}}>Logout</button>
         </div>
       </nav>
 
       <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         
-         <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "20px", marginBottom: "20px", flexShrink: 0 }}>
-            <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>📅 Appointments</button>
-            <button style={getTabStyle("records")} onClick={() => setActiveTab("records")}>📋 Pet Records</button>
-            <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}>
-                💬 Messages
-                {totalUnreadMessages > 0 && (
-                    <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px", marginLeft:"5px"}}>
-                        {totalUnreadMessages}
-                    </span>
-                )}
-            </button>
-            <button style={getTabStyle("inventory")} onClick={() => setActiveTab("inventory")}>📦 Inventory</button>
-            <button style={getTabStyle("reports")} onClick={() => setActiveTab("reports")}>📑 Reports</button>
-         </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "20px", marginBottom: "20px", flexShrink: 0 }}>
+          <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>Appointments</button>
+          <button style={getTabStyle("records")} onClick={() => setActiveTab("records")}>Pet Records</button>
+          <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}> Messages {totalUnreadMessages > 0 && ( <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px", marginLeft:"5px"}}> {totalUnreadMessages} </span> )} </button>
+          <button style={getTabStyle("inventory")} onClick={() => setActiveTab("inventory")}>Inventory</button>
+          <button style={getTabStyle("reports")} onClick={() => setActiveTab("reports")}>Reports</button>
+        </div>
 
-         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-             
-             {/* --- APPOINTMENTS TAB --- */}
-             {activeTab === "appointments" && (
-                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", paddingBottom: "10px", borderBottom: "1px solid #eee", flexShrink: 0 }}>
-                         <h3>Appointments Management</h3>
-                         <div style={{display:"flex", gap:"10px"}}>
-                             <button onClick={() => setShowWalkInModal(true)} style={{background:"#673AB7", color:"white", border:"none", padding:"8px 15px", borderRadius:"20px", cursor:"pointer", fontWeight: "bold"}}>+ Walk-In</button>
-                             <div style={{display:"flex", background:"#f1f1f1", borderRadius:"20px", padding:"2px"}}>
-                                 <button onClick={() => {setApptViewMode("list")}} style={{background: apptViewMode === 'list' ? "white" : "transparent", color: apptViewMode==='list'?"black":"#777", border:"none", borderRadius:"18px", padding:"6px 15px", cursor:"pointer", boxShadow: apptViewMode==='list'?"0 2px 4px rgba(0,0,0,0.1)":"none"}}>List</button>
-                                 <button onClick={() => {setApptViewMode("calendar")}} style={{background: apptViewMode === 'calendar' ? "white" : "transparent", color: apptViewMode==='calendar'?"black":"#777", border:"none", borderRadius:"18px", padding:"6px 15px", cursor:"pointer", boxShadow: apptViewMode==='calendar'?"0 2px 4px rgba(0,0,0,0.1)":"none"}}>Calendar</button>
-                             </div>
-                         </div>
-                     </div>
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            
+            {/* --- APPOINTMENTS TAB --- */}
+            {activeTab === "appointments" && (
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", paddingBottom: "10px", borderBottom: "1px solid #eee", flexShrink: 0 }}>
+                        <h3>Appointments Management</h3>
+                        <div style={{display:"flex", gap:"10px"}}>
+                            <button onClick={() => setShowWalkInModal(true)} style={{background:"#673AB7", color:"white", border:"none", padding:"8px 15px", borderRadius:"20px", cursor:"pointer", fontWeight: "bold"}}>+ Walk-In</button>
+                            <div style={{display:"flex", background:"#f1f1f1", borderRadius:"20px", padding:"2px"}}>
+                                <button onClick={() => {setApptViewMode("list")}} style={{background: apptViewMode === 'list' ? "white" : "transparent", color: apptViewMode==='list'?"black":"#777", border:"none", borderRadius:"18px", padding:"6px 15px", cursor:"pointer", boxShadow: apptViewMode==='list'?"0 2px 4px rgba(0,0,0,0.1)":"none"}}>List</button>
+                                <button onClick={() => {setApptViewMode("calendar")}} style={{background: apptViewMode === 'calendar' ? "white" : "transparent", color: apptViewMode==='calendar'?"black":"#777", border:"none", borderRadius:"18px", padding:"6px 15px", cursor:"pointer", boxShadow: apptViewMode==='calendar'?"0 2px 4px rgba(0,0,0,0.1)":"none"}}>Calendar</button>
+                            </div>
+                        </div>
+                    </div>
 
-                     {apptViewMode === 'calendar' ? (
+                    {apptViewMode === 'calendar' ? (
                         <div style={{flex: 1, display: "flex", flexDirection: "column", overflow: "hidden"}}>
                             <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px", background:"#f8f9fa", padding:"10px", borderRadius:"8px", flexShrink: 0}}>
                                 <div style={{display:"flex", gap:"10px"}}>
@@ -871,579 +908,545 @@ const StaffDashboard = () => {
                                 {calendarView === 'month' ? (<><div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", marginBottom: "5px" }}>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} style={{textAlign:"center", fontWeight:"bold", padding:"5px", color: d === 'Sat' ? 'red' : 'black'}}>{d}</div>)}</div>{renderMonthView()}</>) : (renderWeekView())}
                             </div>
                             <div style={{marginTop:"10px", fontSize:"12px", color:"#555", display:"flex", gap:"15px", flexShrink: 0}}>
-                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"orange"}}></div> Pending</span>
-                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"green"}}></div> Approved</span>
-                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"#f5f5f5", border:"1px solid #ccc"}}></div> Closed</span>
+                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"orange", borderRadius:"2px"}}></div> Pending</span>
+                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"green", borderRadius:"2px"}}></div> Approved/Done</span>
                             </div>
                         </div>
-                     ) : (
-                         <div style={{flex: 1, display: "flex", flexDirection: "column", overflow: "hidden"}}>
-                             <div style={{ display: "flex", gap: "10px", marginBottom: "15px", flexShrink: 0 }}>
-                                 <button onClick={() => setApptSubTab("Pending")} style={{ background: apptSubTab === "Pending" ? "orange" : "#eee", color: apptSubTab === "Pending" ? "white" : "#555", border: "none", padding: "8px 15px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>Pending</button>
-                                 <button onClick={() => setApptSubTab("Approved")} style={{ background: apptSubTab === "Approved" ? "green" : "#eee", color: apptSubTab === "Approved" ? "white" : "#555", border: "none", padding: "8px 15px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>Approved</button>
-                                 <button onClick={() => setApptSubTab("Done")} style={{ background: apptSubTab === "Done" ? "#2196F3" : "#eee", color: apptSubTab === "Done" ? "white" : "#555", border: "none", padding: "8px 15px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>Completed</button>
-                                 <button onClick={() => setApptSubTab("Cancelled")} style={{ background: apptSubTab === "Cancelled" ? "#f44336" : "#eee", color: apptSubTab === "Cancelled" ? "white" : "#555", border: "none", padding: "8px 15px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>Cancelled</button>
-                             </div>
-                             <div style={{ flex: 1, overflowY: "auto" }}>
-                                 <table className="table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.95rem" }}>
-                                     <thead>
-                                         <tr style={{ background: "#f8f9fa", textAlign: "left", color: "#666" }}>
-                                             <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Date & Time</th>
-                                             <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet & Owner</th>
-                                             <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Reason</th>
-                                             <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Status</th>
-                                             <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Actions</th>
-                                         </tr>
-                                     </thead>
-                                     <tbody>
-                                         {filteredAppointments.length === 0 ? <tr><td colSpan="5" style={{padding:"20px", textAlign:"center", color:"#888"}}>No appointments found in this category.</td></tr> :
-                                             filteredAppointments.map((appt) => {
-                                                 const owner = owners.find(o => o.id === appt.ownerId);
-                                                 return (
-                                                     <tr key={appt.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                                         <td style={{ padding: "12px" }}>
-                                                             <div style={{ fontWeight: "bold" }}>{appt.date}</div>
-                                                             <div style={{ fontSize: "0.85rem", color: "#666" }}>{appt.time}</div>
-                                                         </td>
-                                                         <td style={{ padding: "12px" }}>
-                                                             <div style={{ fontWeight: "bold", color: "#2196F3" }}>{appt.petName}</div>
-                                                             <div style={{ fontSize: "0.85rem", color: "#666" }}>Owner: {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown"}</div>
-                                                         </td>
-                                                         <td style={{ padding: "12px" }}>{appt.reason}</td>
-                                                         <td style={{ padding: "12px" }}>
-                                                             <span style={{
-                                                                 padding: "4px 10px", borderRadius: "12px", fontSize: "0.8rem", fontWeight: "bold",
-                                                                 background: appt.status === "Pending" ? "#fff3e0" : appt.status === "Approved" ? "#e8f5e9" : appt.status === "Done" ? "#e3f2fd" : "#ffebee",
-                                                                 color: appt.status === "Pending" ? "orange" : appt.status === "Approved" ? "green" : appt.status === "Done" ? "#2196F3" : "#d32f2f"
-                                                             }}>
-                                                                 {appt.status}
-                                                             </span>
-                                                         </td>
-                                                         <td style={{ padding: "12px" }}>
-                                                             <div style={{ display: "flex", gap: "8px" }}>
-                                                                 {appt.status === "Pending" && (
-                                                                     <>
-                                                                         <button onClick={() => handleStatusUpdate(appt.id, "Approved")} style={{ background: "#4CAF50", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Approve</button>
-                                                                         <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} style={{ background: "#f44336", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Decline</button>
-                                                                     </>
-                                                                 )}
-                                                                 {appt.status === "Approved" && (
-                                                                     <>
-                                                                         <button onClick={() => openConsultModal(appt.id)} style={{ background: "#2196F3", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Consultation</button>
-                                                                         <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} style={{ background: "#f44336", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>Cancel</button>
-                                                                     </>
-                                                                 )}
-                                                                 {appt.status === "Done" && <span style={{color:"#888", fontSize:"12px"}}>Completed</span>}
-                                                                 {appt.status === "Cancelled" && <span style={{color:"#888", fontSize:"12px"}}>Cancelled</span>}
-                                                             </div>
-                                                         </td>
-                                                     </tr>
-                                                 );
-                                             })
-                                         }
-                                     </tbody>
-                                 </table>
-                             </div>
-                         </div>
-                     )}
-                 </div>
-             )}
-
-             {/* --- PET RECORDS TAB (UPDATED WITH PHONE NUMBER) --- */}
-             {activeTab === "records" && (
-                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                     <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px"}}>
-                         <h3>Pet Records Database</h3>
-                         <input type="text" placeholder="Search Pet or Owner Name..." value={petSearch} onChange={(e) => setPetSearch(e.target.value)} style={{padding:"10px", width:"300px", borderRadius:"8px", border:"1px solid #ddd"}} />
-                     </div>
-                     <div style={{ flex: 1, overflowY: "auto" }}>
-                         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                             <thead>
-                                 <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet Name</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Species/Breed</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Owner & Phone</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>History</th>
-                                 </tr>
-                             </thead>
-                             <tbody>
-                                 {filteredRecords.map(pet => {
-                                     const owner = owners.find(o => o.id === pet.ownerId);
-                                     return (
-                                         <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                             <td style={{ padding: "12px", fontWeight: "bold" }}>{pet.name}</td>
-                                             <td style={{ padding: "12px", color: "#666" }}>{pet.species} ({pet.breed})</td>
-                                             <td style={{ padding: "12px" }}>
-                                                 <div style={{fontWeight:"500"}}>{owner ? `${owner.firstName} ${owner.lastName}` : "Unknown"}</div>
-                                                 {/* FIX: Checking phoneNumber specifically */}
-                                                 <div style={{fontSize:"12px", color:"#2196F3"}}>📞 {owner ? (owner.phoneNumber || owner.contactNumber || "No Phone") : "N/A"}</div>
-                                             </td>
-                                             <td style={{ padding: "12px" }}>
-                                                 <button onClick={() => setViewingPet(pet)} style={{ background: "#673AB7", color: "white", border: "none", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}>View History</button>
-                                             </td>
-                                         </tr>
-                                     );
-                                 })}
-                             </tbody>
-                         </table>
-                     </div>
-                 </div>
-             )}
-
-             {/* --- MESSAGES TAB --- */}
-             {activeTab === "messages" && (
-                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", overflow: "hidden", padding: 0 }}>
-                     <div style={{ width: "300px", borderRight: "1px solid #eee", display: "flex", flexDirection: "column", background: "#f9f9f9" }}>
-                         <div style={{ padding: "15px", borderBottom: "1px solid #eee", fontWeight: "bold", background: "white" }}>Conversations</div>
-                         <div style={{ flex: 1, overflowY: "auto" }}>
-                             {owners.map(owner => {
-                                 const unread = getUnreadCount(owner.id);
-                                 return (
-                                     <div key={owner.id} onClick={() => setSelectedChatOwner(owner)} 
-                                          style={{ padding: "15px", cursor: "pointer", background: selectedChatOwner?.id === owner.id ? "#e3f2fd" : "transparent", borderBottom: "1px solid #f1f1f1", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                         <div>
-                                             <div style={{ fontWeight: "bold", fontSize: "14px" }}>{owner.firstName} {owner.lastName}</div>
-                                             <div style={{ fontSize: "11px", color: "#666" }}>Click to view chat</div>
-                                         </div>
-                                         {unread > 0 && <span style={{ background: "red", color: "white", borderRadius: "50%", padding: "2px 8px", fontSize: "11px", fontWeight: "bold" }}>{unread}</span>}
-                                     </div>
-                                 );
-                             })}
-                         </div>
-                     </div>
-                     <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "white" }}>
-                         {selectedChatOwner ? (
-                             <>
-                                 <div style={{ padding: "15px", borderBottom: "1px solid #eee", background: "#f8f9fa", fontWeight: "bold", color: "#333" }}>
-                                     Chat with {selectedChatOwner.firstName} {selectedChatOwner.lastName}
-                                 </div>
-                                 <div style={{ flex: 1, padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
-                                     {chatMessages.length === 0 ? <p style={{color:"#888", textAlign:"center", marginTop:"20px"}}>No messages yet.</p> :
-                                         chatMessages.map(msg => (
-                                             <div key={msg.id} style={{ alignSelf: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start", maxWidth: "70%" }}>
-                                                 <div style={{ background: msg.senderId === auth.currentUser.uid ? "#2196F3" : "#f1f1f1", color: msg.senderId === auth.currentUser.uid ? "white" : "#333", padding: "10px 15px", borderRadius: "12px", fontSize: "14px", position: "relative" }}>
-                                                     {msg.text}
-                                                     {msg.isEdited && <span style={{fontSize:"9px", opacity:0.7, marginLeft:"5px"}}>(edited)</span>}
-                                                 </div>
-                                                 {msg.senderId === auth.currentUser.uid && (
-                                                     <div style={{ textAlign: "right", marginTop: "2px" }}>
-                                                         <span onClick={() => handleStartEdit(msg)} style={{ fontSize: "10px", color: "#999", cursor: "pointer", marginRight: "5px" }}>Edit</span>
-                                                         {msg.read && <span style={{ fontSize: "10px", color: "#4CAF50" }}>Read</span>}
-                                                     </div>
-                                                 )}
-                                             </div>
-                                         ))
-                                     }
-                                     <div ref={scrollRef}></div>
-                                 </div>
-                                 <form onSubmit={handleSendMessage} style={{ padding: "15px", borderTop: "1px solid #eee", display: "flex", gap: "10px", background: "#f9f9f9" }}>
-                                     <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." style={{ flex: 1, padding: "12px", borderRadius: "20px", border: "1px solid #ddd", outline: "none" }} />
-                                     {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{ background: "#9e9e9e", color: "white", border: "none", padding: "0 15px", borderRadius: "20px", cursor: "pointer" }}>Cancel</button>}
-                                     <button type="submit" style={{ background: "#2196F3", color: "white", border: "none", padding: "0 20px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>{editingMessageId ? "Update" : "Send"}</button>
-                                 </form>
-                             </>
-                         ) : (
-                             <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#999" }}>Select a conversation to start chatting</div>
-                         )}
-                     </div>
-                 </div>
-             )}
-
-             {/* --- INVENTORY TAB (UPDATED ACTIONS WITH MINUS) --- */}
-             {activeTab === "inventory" && (
-                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box", overflowY: "auto" }}>
-                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", flexShrink: 0 }}>
-                         <h3>Inventory Management</h3>
-                         <div style={{display:"flex", gap:"10px"}}>
-                            <button onClick={printInventoryReport} style={{background:"#607D8B", color:"white", border:"none", padding:"10px 20px", borderRadius:"8px", cursor:"pointer"}}>Print Report</button>
-                            <button onClick={handleOpenAddInventory} style={{background:"#4CAF50", color:"white", border:"none", padding:"10px 20px", borderRadius:"8px", cursor:"pointer", fontWeight:"bold"}}>+ Add Item</button>
-                         </div>
-                     </div>
-                     <input type="text" placeholder="Search Inventory..." value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} style={{padding:"10px", width:"100%", maxWidth:"400px", borderRadius:"8px", border:"1px solid #ddd", marginBottom:"20px"}} />
-                     
-                     <div style={{ flex: 1, overflowY: "auto" }}>
-                         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                             <thead style={{position:"sticky", top:0, background:"white", zIndex: 1}}>
-                                 <tr style={{ background: "#f8f9fa", textAlign: "left" }}>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Item Name</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Category</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Stock Level</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Status</th>
-                                     <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Actions</th>
-                                 </tr>
-                             </thead>
-                             <tbody>
-                                 {inventory.filter(i => i.name.toLowerCase().includes(inventorySearch.toLowerCase())).map(item => {
-                                     const status = getStockStatus(item);
-                                     return (
-                                         <tr key={item.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                             <td style={{ padding: "12px", fontWeight: "bold" }}>{item.name}</td>
-                                             <td style={{ padding: "12px", color: "#666" }}>{item.category}</td>
-                                             <td style={{ padding: "12px" }}>
-                                                 <span style={{fontSize:"16px", fontWeight:"bold"}}>{item.quantity}</span> <span style={{color:"#777", fontSize:"12px"}}>{item.unit}</span>
-                                             </td>
-                                             <td style={{ padding: "12px" }}>
-                                                 <span style={{color: status.color, fontWeight:"bold", border:`1px solid ${status.color}`, padding:"2px 8px", borderRadius:"12px", fontSize:"11px"}}>{status.label}</span>
-                                             </td>
-                                             <td style={{ padding: "12px" }}>
-                                                 <div style={{display:"flex", gap:"8px"}}>
-                                                     {/* MINUS BUTTON ADDED HERE */}
-                                                     <button onClick={() => handleQuickUsage(item)} style={{background:"#ffebee", color:"red", border:"1px solid #ffcdd2", borderRadius:"4px", cursor:"pointer", padding:"2px 8px", fontWeight:"bold"}} title="Record Usage (Minus)">-</button>
-                                                     
-                                                     <button onClick={() => handleOpenEditInventory(item)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Edit Item">Edit</button>
-                                                     <button onClick={() => handleDeleteInventory(item.id)} style={{background:"none", border:"none", cursor:"pointer", fontSize:"18px"}} title="Delete Item">Delete</button>
-                                                 </div>
-                                             </td>
-                                         </tr>
-                                     );
-                                 })}
-                             </tbody>
-                         </table>
-                     </div>
-                 </div>
-             )}
-
-             {/* --- REPORTS TAB (AUTOMATIC & DETAILED) --- */}
-             {activeTab === "reports" && (
-                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box", overflowY: "auto" }}>
-                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", flexShrink: 0 }}>
-                         <h3>Automated Reports</h3>
-                         {reportStartDate && reportEndDate && (
-                             <button onClick={printSummaryReport} style={{background:"#607D8B", color:"white", border:"none", padding:"10px 20px", borderRadius:"8px", cursor:"pointer"}}>
-                                 🖨️ Print Summary
-                             </button>
-                         )}
-                     </div>
-
-                     <div style={{background:"#e3f2fd", padding:"20px", borderRadius:"12px", marginBottom:"30px", border:"1px solid #bbdefb", flexShrink: 0}}>
-                         <h4 style={{marginTop:0, color:"#1565C0"}}>1. Select Date Range</h4>
-                         <div style={{display:"flex", gap:"20px", alignItems:"center"}}>
-                             <div>
-                                 <label style={{display:"block", fontSize:"12px", fontWeight:"bold", marginBottom:"5px", color:"#555"}}>Start Date</label>
-                                 <input type="date" value={reportStartDate} onChange={(e) => setReportStartDate(e.target.value)} style={{padding:"10px", borderRadius:"8px", border:"1px solid #ccc"}} />
-                             </div>
-                             <span style={{marginTop:"20px"}}>➔</span>
-                             <div>
-                                 <label style={{display:"block", fontSize:"12px", fontWeight:"bold", marginBottom:"5px", color:"#555"}}>End Date</label>
-                                 <input type="date" value={reportEndDate} onChange={(e) => setReportEndDate(e.target.value)} style={{padding:"10px", borderRadius:"8px", border:"1px solid #ccc"}} />
-                             </div>
-                         </div>
-                     </div>
-
-                     {(!reportStartDate || !reportEndDate) ? (
-                         <div style={{textAlign:"center", color:"#999", marginTop:"50px"}}>
-                             <div style={{fontSize:"40px", marginBottom:"10px"}}>📅</div>
-                             Please select a date range to generate the report automatically.
-                         </div>
-                     ) : (
-                         <div className="fade-in">
-                             <h4 style={{color:"#1565C0", marginBottom:"15px"}}>2. Report Summary ({reportStartDate} to {reportEndDate})</h4>
-                             
-                             <div style={{display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:"20px"}}>
-                                 {/* Inventory Added Card */}
-                                 <div onClick={() => handleReportClick('added')} style={{background:"white", border:"1px solid #eee", padding:"20px", borderRadius:"12px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)", textAlign:"center", cursor: "pointer", transition: "transform 0.1s"}}>
-                                     <div style={{fontSize:"30px", marginBottom:"10px"}}>📦</div>
-                                     <div style={{color:"#777", fontSize:"14px", fontWeight:"bold", textTransform:"uppercase"}}>Items Added</div>
-                                     <div style={{fontSize:"36px", fontWeight:"bold", color:"#4CAF50", margin:"10px 0"}}>{generatedStats.itemsAdded}</div>
-                                     <div style={{fontSize:"12px", color:"#2196F3", textDecoration:"underline"}}>View Details</div>
-                                 </div>
-
-                                 {/* Inventory Used Card */}
-                                 <div onClick={() => handleReportClick('used')} style={{background:"white", border:"1px solid #eee", padding:"20px", borderRadius:"12px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)", textAlign:"center", cursor: "pointer", transition: "transform 0.1s"}}>
-                                     <div style={{fontSize:"30px", marginBottom:"10px"}}>🧾</div>
-                                     <div style={{color:"#777", fontSize:"14px", fontWeight:"bold", textTransform:"uppercase"}}>Items Used</div>
-                                     <div style={{fontSize:"36px", fontWeight:"bold", color:"#f44336", margin:"10px 0"}}>{generatedStats.itemsUsed}</div>
-                                     <div style={{fontSize:"12px", color:"#2196F3", textDecoration:"underline"}}>View Details</div>
-                                 </div>
-
-                                 {/* Appointments Card */}
-                                 <div onClick={() => handleReportClick('appointments')} style={{background:"white", border:"1px solid #eee", padding:"20px", borderRadius:"12px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)", textAlign:"center", cursor: "pointer", transition: "transform 0.1s"}}>
-                                     <div style={{fontSize:"30px", marginBottom:"10px"}}>🐾</div>
-                                     <div style={{color:"#777", fontSize:"14px", fontWeight:"bold", textTransform:"uppercase"}}>Appointments</div>
-                                     <div style={{fontSize:"36px", fontWeight:"bold", color:"#2196F3", margin:"10px 0"}}>{generatedStats.totalAppointments}</div>
-                                     <div style={{fontSize:"12px", color:"#666"}}>
-                                         {generatedStats.completedAppointments} Done / {generatedStats.cancelledAppointments} Cancelled
-                                     </div>
-                                 </div>
-                                 
-                                 {/* Low Stock Card */}
-                                 <div onClick={() => handleReportClick('lowstock')} style={{background:"#fff3e0", border:"1px solid #ffe0b2", padding:"20px", borderRadius:"12px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)", textAlign:"center", cursor: "pointer"}}>
-                                     <div style={{fontSize:"30px", marginBottom:"10px"}}>⚠️</div>
-                                     <div style={{color:"#ef6c00", fontSize:"14px", fontWeight:"bold", textTransform:"uppercase"}}>Low Stock Alerts</div>
-                                     <div style={{fontSize:"36px", fontWeight:"bold", color:"#ef6c00", margin:"10px 0"}}>{lowStockItems.length}</div>
-                                     <div style={{fontSize:"12px", color:"#ef6c00"}}>Current Items Low</div>
-                                 </div>
-
-                                 {/* Expired Items Card */}
-                                 <div onClick={() => handleReportClick('expired')} style={{background:"#ffebee", border:"1px solid #ffcdd2", padding:"20px", borderRadius:"12px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)", textAlign:"center", cursor: "pointer"}}>
-                                     <div style={{fontSize:"30px", marginBottom:"10px"}}>📅</div>
-                                     <div style={{color:"#c62828", fontSize:"14px", fontWeight:"bold", textTransform:"uppercase"}}>Expired Items</div>
-                                     <div style={{fontSize:"36px", fontWeight:"bold", color:"#c62828", margin:"10px 0"}}>{expiredItems.length}</div>
-                                     <div style={{fontSize:"12px", color:"#c62828"}}>Past Expiry Date</div>
-                                 </div>
-
-                                 {/* Service Breakdown */}
-                                 <div style={{background:"white", border:"1px solid #eee", padding:"20px", borderRadius:"12px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-                                     <h5 style={{marginTop:0, borderBottom:"1px solid #eee", paddingBottom:"5px"}}>Service Types</h5>
-                                     <div style={{maxHeight:"120px", overflowY:"auto"}}>
-                                        {Object.entries(serviceBreakdown).map(([key, val]) => (
-                                            <div key={key} style={{display:"flex", justifyContent:"space-between", fontSize:"13px", padding:"4px 0"}}>
-                                                <span>{key}</span>
-                                                <strong>{val}</strong>
+                    ) : (
+                        <div style={{display: "flex", flexDirection: "column", height: "100%", overflow: "hidden"}}>
+                            <div style={{ display: "flex", gap: "10px", marginBottom: "15px", overflowX: "auto", paddingBottom: "5px", flexShrink: 0 }}>
+                                {["Pending", "Approved", "Done", "Cancelled"].map(status => (
+                                    <button key={status} onClick={() => setApptSubTab(status)} style={{ padding: "8px 15px", border: "1px solid #ddd", borderRadius: "20px", background: apptSubTab === status ? "#2196F3" : "white", color: apptSubTab === status ? "white" : "#333", cursor: "pointer", transition: "all 0.2s" }}>{status}</button>
+                                ))}
+                            </div>
+                            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
+                                {filteredAppointments.length === 0 ? <p style={{ textAlign: "center", color: "#888", marginTop: "20px" }}>No {apptSubTab.toLowerCase()} appointments.</p> : (
+                                    filteredAppointments.map(appt => (
+                                        <div key={appt.id} className="list-item" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
+                                            <div>
+                                                <div style={{fontWeight:"bold", fontSize:"16px"}}>{appt.petName} <span style={{fontSize:"12px", color:"#666", fontWeight:"normal"}}>({appt.type || 'Regular'})</span></div>
+                                                <div style={{fontSize:"14px", color:"#555"}}>📅 {appt.date} at {appt.time}</div>
+                                                <div style={{fontSize:"14px", color:"#777"}}>Reason: {appt.reason}</div>
                                             </div>
-                                        ))}
-                                        {Object.keys(serviceBreakdown).length === 0 && <span style={{color:"#999", fontSize:"12px"}}>No data</span>}
-                                     </div>
-                                 </div>
-                             </div>
+                                            <div style={{display:"flex", gap:"10px"}}>
+                                                {appt.status === "Pending" && (
+                                                    <>
+                                                        <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{background:"#4CAF50"}}>Approve</button>
+                                                        <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{background:"#f44336"}}>Decline</button>
+                                                    </>
+                                                )}
+                                                {appt.status === "Approved" && (
+                                                    <>
+                                                        <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{background:"#2196F3"}}>Consultation</button>
+                                                        <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{background:"#f44336"}}>Cancel</button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
 
-                             <div style={{marginTop:"30px", padding:"20px", background:"#f9f9f9", borderRadius:"8px", border:"1px solid #eee"}}>
-                                 <h5 style={{margin:"0 0 10px 0"}}>System Note:</h5>
-                                 <p style={{margin:0, fontSize:"13px", color:"#666"}}>
-                                     This report is generated automatically based on audit logs. 
-                                     Click on the stats cards above to view detailed lists.
-                                 </p>
-                             </div>
-                         </div>
-                     )}
-                 </div>
-             )}
+            {/* --- RECORDS TAB (UPDATED) --- */}
+            {activeTab === "records" && (
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                    <h3>Pet Records</h3>
+                    
+                    {/* Filter Controls */}
+                    <div style={{ display: "flex", gap: "15px", marginBottom: "15px" }}>
+                        <input 
+                            type="text" 
+                            placeholder="Search pet or owner name..." 
+                            value={petSearch} 
+                            onChange={(e) => setPetSearch(e.target.value)} 
+                            style={{ flex: 1, padding: "10px", border: "1px solid #ddd", borderRadius: "6px" }} 
+                        />
+                        <div style={{ display: "flex", background: "#f1f1f1", borderRadius: "8px", padding: "4px" }}>
+                            {["All", "Dog", "Cat", "Other"].map(type => (
+                                <button 
+                                    key={type} 
+                                    onClick={() => setPetFilterType(type)}
+                                    style={{
+                                        background: petFilterType === type ? "white" : "transparent",
+                                        color: petFilterType === type ? "#2196F3" : "#666",
+                                        fontWeight: petFilterType === type ? "bold" : "normal",
+                                        border: "none",
+                                        borderRadius: "6px",
+                                        padding: "6px 15px",
+                                        cursor: "pointer",
+                                        boxShadow: petFilterType === type ? "0 2px 4px rgba(0,0,0,0.1)" : "none",
+                                        transition: "all 0.2s"
+                                    }}
+                                >
+                                    {type}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div style={{ flex: 1, overflowY: "auto" }}>
+                        {viewingPet ? (
+                            <div>
+                                <button onClick={() => setViewingPet(null)} style={{ marginBottom: "15px", padding: "5px 10px", cursor: "pointer", border:"1px solid #ccc", borderRadius:"4px", background:"white" }}>← Back to List</button>
+                                <div style={{ background: "#f9f9f9", padding: "20px", borderRadius: "8px", border: "1px solid #ddd" }}>
+                                    <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "16px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
+                                    <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
+                                    <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
+                                    <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
+                                    
+                                    <h4 style={{ marginTop: "20px", borderBottom: "1px solid #ccc", paddingBottom: "5px" }}>Medical History</h4>
+                                    {appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").length === 0 ? <p style={{color:"#888"}}>No history yet.</p> : (
+                                        appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").map(hist => (
+                                            <div key={hist.id} style={{ background: "white", padding: "10px", borderRadius: "6px", marginBottom: "10px", border: "1px solid #eee" }}>
+                                                <div style={{ fontWeight: "bold", color: "#2196F3" }}>{hist.date} - {hist.reason}</div>
+                                                <div style={{ fontSize: "14px", marginTop: "5px" }}><strong>Diagnosis:</strong> {hist.diagnosis}</div>
+                                                <div style={{ fontSize: "14px" }}><strong>Treatment:</strong> {hist.medicine}</div>
+                                                {hist.notes && <div style={{ fontSize: "13px", color: "#555", marginTop: "5px", fontStyle: "italic" }}>"{hist.notes}"</div>}
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                            <table style={{ width: "100%", borderCollapse: "collapse", background: "white" }}>
+                                <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 5, boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                                    <tr style={{ textAlign: "left", color: "#555" }}>
+                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet Name</th>
+                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Species / Breed</th>
+                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Owner</th>
+                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Contact</th>
+                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredRecords.length === 0 ? (
+                                        <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#888" }}>No pets found matching filters.</td></tr>
+                                    ) : (
+                                        filteredRecords.map(pet => {
+                                            const owner = owners.find(o => o.id === pet.ownerId);
+                                            return (
+                                                <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                                                    <td style={{ padding: "12px", fontWeight: "bold", fontSize:"15px" }}>{pet.name}</td>
+                                                    <td style={{ padding: "12px" }}>
+                                                        {pet.species === "Cat" ? "🐱" : pet.species === "Dog" ? "🐶" : "🐾"} {pet.species} 
+                                                        <br/><span style={{ fontSize: "12px", color: "#888" }}>{pet.breed}</span>
+                                                    </td>
+                                                    <td style={{ padding: "12px" }}>
+                                                        {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown Owner"}
+                                                    </td>
+                                                    <td style={{ padding: "12px", color: "#555" }}>
+                                                        {owner?.phone || owner?.phoneNumber || <span style={{color:"#ccc"}}>N/A</span>}
+                                                    </td>
+                                                    <td style={{ padding: "12px" }}>
+                                                        <button 
+                                                            onClick={() => setViewingPet(pet)} 
+                                                            style={{ 
+                                                                background: "#e3f2fd", 
+                                                                color: "#1565C0", 
+                                                                border: "none", 
+                                                                padding: "6px 12px", 
+                                                                borderRadius: "4px", 
+                                                                cursor: "pointer", 
+                                                                fontWeight: "bold", 
+                                                                fontSize: "13px" 
+                                                            }}
+                                                        >
+                                                            View
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        )}
+                    </div>
+                </div>
+            )}
 
-         </div>
+            {/* --- MESSAGES TAB --- */}
+            {activeTab === "messages" && (
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", padding: 0, overflow: "hidden" }}>
+                    <div style={{ width: "300px", borderRight: "1px solid #eee", display: "flex", flexDirection: "column", background: "#f9f9f9" }}>
+                        <div style={{ padding: "15px", fontWeight: "bold", borderBottom: "1px solid #ddd", background: "white" }}>Client List</div>
+                        <div style={{ flex: 1, overflowY: "auto" }}>
+                            {owners.map(owner => {
+                                const unread = getUnreadCount(owner.id);
+                                return (
+                                    <div key={owner.id} onClick={() => setSelectedChatOwner(owner)} style={{ padding: "15px", cursor: "pointer", background: selectedChatOwner?.id === owner.id ? "#e3f2fd" : "transparent", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between" }}>
+                                        <span>{owner.firstName} {owner.lastName}</span>
+                                        {unread > 0 && <span style={{ background: "red", color: "white", borderRadius: "50%", padding: "2px 8px", fontSize: "12px" }}>{unread}</span>}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "white" }}>
+                        {selectedChatOwner ? (
+                            <>
+                                <div style={{ padding: "15px", borderBottom: "1px solid #eee", fontWeight: "bold", background: "#f1f1f1" }}>Chat with {selectedChatOwner.firstName}</div>
+                                <div style={{ flex: 1, padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
+                                    {chatMessages.length === 0 && <p style={{ textAlign: "center", color: "#888" }}>No messages yet.</p>}
+                                    {chatMessages.map(msg => (
+                                        <div key={msg.id} style={{ alignSelf: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start", maxWidth: "70%", display: "flex", flexDirection: "column", alignItems: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start" }}>
+                                            <div style={{ background: msg.senderId === auth.currentUser.uid ? "#2196F3" : "#eee", color: msg.senderId === auth.currentUser.uid ? "white" : "#333", padding: "10px 15px", borderRadius: "15px", fontSize: "14px" }}>
+                                                {msg.text}
+                                            </div>
+                                            {msg.senderId === auth.currentUser.uid && (
+                                                <button onClick={() => handleStartEdit(msg)} style={{fontSize:"10px", border:"none", background:"none", color:"#999", cursor:"pointer", marginTop:"2px"}}>Edit</button>
+                                            )}
+                                        </div>
+                                    ))}
+                                    <div ref={scrollRef} />
+                                </div>
+                                <form onSubmit={handleSendMessage} style={{ padding: "15px", borderTop: "1px solid #eee", display: "flex", gap: "10px" }}>
+                                    <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." style={{ flex: 1, padding: "10px", borderRadius: "20px", border: "1px solid #ddd" }} />
+                                    {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{background:"#999", color:"white", border:"none", padding:"0 15px", borderRadius:"20px", cursor:"pointer"}}>Cancel</button>}
+                                    <button type="submit" style={{ background: "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>{editingMessageId ? "Update" : "Send"}</button>
+                                </form>
+                            </>
+                        ) : (
+                            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>Select a client to start chatting</div>
+                        )}
+                    </div>
+                </div>
+            )}
 
-         {/* --- MODALS --- */}
-         {showWalkInModal && (
-             <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-                 <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", boxShadow:"0 10px 25px rgba(0,0,0,0.2)"}}>
-                     <h3>Create Walk-In Appointment</h3>
-                     <form onSubmit={handleCreateWalkIn} style={{display:"flex", flexDirection:"column", gap:"10px"}}>
-                         <input type="text" placeholder="Pet Name" required value={walkInData.petName} onChange={e => setWalkInData({...walkInData, petName: e.target.value})} style={{padding:"10px", borderRadius:"8px", border:"1px solid #ccc"}} />
-                         <input type="date" required value={walkInData.date} onChange={e => setWalkInData({...walkInData, date: e.target.value})} style={{padding:"10px", borderRadius:"8px", border:"1px solid #ccc"}} />
-                         <input type="time" required value={walkInData.time} onChange={e => setWalkInData({...walkInData, time: e.target.value})} style={{padding:"10px", borderRadius:"8px", border:"1px solid #ccc"}} />
-                         <select value={walkInData.reason} onChange={e => setWalkInData({...walkInData, reason: e.target.value})} style={{padding:"10px", borderRadius:"8px", border:"1px solid #ccc"}}>
-                             <option value="">Select Reason</option>
-                             {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                         </select>
-                         <button type="submit" style={{marginTop:"10px", padding:"12px", background:"#673AB7", color:"white", border:"none", borderRadius:"8px", cursor:"pointer", fontWeight:"bold"}}>Book Walk-In</button>
-                         <button type="button" onClick={() => setShowWalkInModal(false)} style={{padding:"10px", background:"#eee", border:"none", borderRadius:"8px", cursor:"pointer"}}>Cancel</button>
-                     </form>
-                 </div>
-             </div>
-         )}
+            {/* --- INVENTORY TAB --- */}
+            {activeTab === "inventory" && (
+                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                        <h3>Inventory Management</h3>
+                        <div style={{display:"flex", gap:"10px"}}>
+                            <button onClick={printInventoryReport} style={{ background: "#607D8B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", display:"flex", alignItems:"center", gap:"5px" }}>🖨️ Print List</button>
+                            <button onClick={handleOpenAddInventory} style={{ background: "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>+ Add Item</button>
+                        </div>
+                    </div>
+                    <input type="text" placeholder="Search item..." value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} style={{ padding: "10px", width: "100%", marginBottom: "15px", border: "1px solid #ddd", borderRadius: "6px" }} />
+                    
+                    <div style={{ flex: 1, overflowY: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                            <thead style={{ position: "sticky", top: 0, background: "white", boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                                <tr style={{ textAlign: "left", color: "#666" }}>
+                                    <th style={{ padding: "15px" }}>Item Name</th>
+                                    <th>Category</th>
+                                    <th>Stock</th>
+                                    <th>Unit</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {inventory.filter(i => i.name.toLowerCase().includes(inventorySearch.toLowerCase())).map(item => {
+                                    const status = getStockStatus(item);
+                                    return (
+                                        <tr key={item.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                                            <td style={{ padding: "15px", fontWeight: "bold" }}>{item.name}</td>
+                                            <td>{item.category}</td>
+                                            <td>{item.quantity}</td>
+                                            <td>{item.unit}</td>
+                                            <td><span style={{ background: status.color, color: "white", padding: "4px 10px", borderRadius: "12px", fontSize: "12px" }}>{status.label}</span></td>
+                                            <td>
+                                                <button onClick={() => handleQuickUsage(item)} style={{marginRight:"8px", background:"#FF9800", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"12px"}}>Use</button>
+                                                <button onClick={() => handleOpenEditInventory(item)} style={{ marginRight: "10px", background: "none", border: "1px solid #2196F3", color: "#2196F3", padding: "5px 10px", borderRadius: "4px", cursor: "pointer" }}>Edit</button>
+                                                <button onClick={() => handleDeleteInventory(item.id)} style={{ background: "none", border: "1px solid #f44336", color: "#f44336", padding: "5px 10px", borderRadius: "4px", cursor: "pointer" }}>Delete</button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
 
-         {showInventoryModal && (
-             <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-                 <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px"}}>
-                     <h3>{editingInventoryId ? "Edit Item" : "Add New Inventory Item"}</h3>
-                     <form onSubmit={handleSaveInventory} style={{display:"flex", flexDirection:"column", gap:"10px"}}>
-                         <input type="text" placeholder="Item Name" required value={inventoryData.name} onChange={e => setInventoryData({...inventoryData, name: e.target.value})} style={{padding:"10px", border:"1px solid #ccc", borderRadius:"6px"}} />
-                         <select required value={inventoryData.category} onChange={e => setInventoryData({...inventoryData, category: e.target.value})} style={{padding:"10px", border:"1px solid #ccc", borderRadius:"6px"}}>
-                             <option value="">Select Category</option>
-                             {INVENTORY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                         </select>
-                         <div style={{display:"flex", gap:"10px"}}>
-                             <input type="number" placeholder="Qty" required value={inventoryData.quantity} onChange={e => setInventoryData({...inventoryData, quantity: parseInt(e.target.value)})} style={{flex:1, padding:"10px", border:"1px solid #ccc", borderRadius:"6px"}} />
-                             <select value={inventoryData.unit} onChange={e => setInventoryData({...inventoryData, unit: e.target.value})} style={{flex:1, padding:"10px", border:"1px solid #ccc", borderRadius:"6px"}}>
-                                 {INVENTORY_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                             </select>
-                         </div>
-                         {/* ADDED: EXPIRY & THRESHOLD */}
-                         <div style={{display:"flex", gap:"10px"}}>
-                             <div style={{flex:1}}>
-                                 <label style={{fontSize:"12px", fontWeight:"bold"}}>Expiry Date</label>
-                                 <input type="date" value={inventoryData.expiryDate} onChange={e => setInventoryData({...inventoryData, expiryDate: e.target.value})} style={{width:"100%", padding:"10px", border:"1px solid #ccc", borderRadius:"6px"}} />
-                             </div>
-                             <div style={{flex:1}}>
-                                 <label style={{fontSize:"12px", fontWeight:"bold"}}>Reorder Level</label>
-                                 <input type="number" placeholder="Min Qty" value={inventoryData.threshold} onChange={e => setInventoryData({...inventoryData, threshold: parseInt(e.target.value)})} style={{width:"100%", padding:"10px", border:"1px solid #ccc", borderRadius:"6px"}} />
-                             </div>
-                         </div>
+            {/* --- REPORTS TAB --- */}
+            {activeTab === "reports" && (
+                <div className="card" style={{ width: "100%", height: "100%", overflowY: "auto", padding: "30px", boxSizing: "border-box" }}>
+                    <div style={{maxWidth:"800px", margin:"0 auto"}}>
+                        <h2 style={{textAlign:"center", color:"#333", marginBottom:"30px"}}>Clinic Performance Reports</h2>
+                        
+                        <div style={{background:"#f5f5f5", padding:"20px", borderRadius:"12px", display:"flex", gap:"15px", alignItems:"center", justifyContent:"center", marginBottom:"30px", border:"1px solid #ddd"}}>
+                            <label><strong>From:</strong> <input type="date" value={reportStartDate} onChange={(e) => setReportStartDate(e.target.value)} style={{padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} /></label>
+                            <label><strong>To:</strong> <input type="date" value={reportEndDate} onChange={(e) => setReportEndDate(e.target.value)} style={{padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} /></label>
+                            {(reportStartDate && reportEndDate) && <button onClick={printSummaryReport} style={{marginLeft:"15px", background:"#607D8B", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>🖨️ Print Summary</button>}
+                        </div>
 
-                         <button type="submit" style={{background:"#4CAF50", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>{editingInventoryId ? "Update Item" : "Add Item"}</button>
-                         <button type="button" onClick={() => setShowInventoryModal(false)} style={{background:"#eee", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                     </form>
-                 </div>
-             </div>
-         )}
+                        {(reportStartDate && reportEndDate) ? (
+                            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"20px"}}>
+                                {/* Inventory Stats Block */}
+                                <div style={{background:"white", borderRadius:"12px", border:"1px solid #eee", padding:"20px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+                                    <h3 style={{marginTop:0, borderBottom:"2px solid #2196F3", paddingBottom:"10px", color:"#2196F3"}}>Inventory Stats</h3>
+                                    <div onClick={() => handleReportClick('added')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer", transition:"background 0.2s"}} onMouseOver={e=>e.currentTarget.style.background="#f9f9f9"} onMouseOut={e=>e.currentTarget.style.background="white"}>
+                                        <span>Items Received / Added:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{generatedStats.itemsAdded}</span>
+                                    </div>
+                                    <div onClick={() => handleReportClick('used')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer"}} onMouseOver={e=>e.currentTarget.style.background="#f9f9f9"} onMouseOut={e=>e.currentTarget.style.background="white"}>
+                                        <span>Items Used / Issued:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{generatedStats.itemsUsed}</span>
+                                    </div>
+                                    <div onClick={() => handleReportClick('lowstock')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer", color:"#ff9800"}} onMouseOver={e=>e.currentTarget.style.background="#fff3e0"} onMouseOut={e=>e.currentTarget.style.background="white"}>
+                                        <span>⚠️ Low Stock Alerts:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{lowStockItems.length}</span>
+                                    </div>
+                                    <div onClick={() => handleReportClick('expired')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", cursor:"pointer", color:"#f44336"}} onMouseOver={e=>e.currentTarget.style.background="#ffebee"} onMouseOut={e=>e.currentTarget.style.background="white"}>
+                                        <span>⛔ Expired Items:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{expiredItems.length}</span>
+                                    </div>
+                                </div>
 
-         {showConsultModal && (
-             <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.6)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-                 <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"600px", maxHeight:"90vh", overflowY:"auto"}}>
-                     <h2 style={{marginTop:0, borderBottom:"1px solid #eee", paddingBottom:"10px"}}>Consultation Form</h2>
-                     <form onSubmit={handleFinishConsultation} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
-                         <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"15px"}}>
-                             <div>
-                                 <label style={{fontSize:"12px", fontWeight:"bold"}}>Date</label>
-                                 <input type="date" required value={consultData.date} onChange={e => setConsultData({...consultData, date: e.target.value})} style={{width:"100%", padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} />
-                             </div>
-                             <div>
-                                 <label style={{fontSize:"12px", fontWeight:"bold"}}>Main Complaint / Reason</label>
-                                 <input type="text" value={consultData.reason} onChange={e => setConsultData({...consultData, reason: e.target.value})} style={{width:"100%", padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} />
-                             </div>
-                         </div>
-
-                         <div>
-                             <label style={{fontSize:"12px", fontWeight:"bold"}}>Symptoms</label>
-                             <div style={{display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:"5px", background:"#f9f9f9", padding:"10px", borderRadius:"8px", maxHeight:"100px", overflowY:"auto"}}>
-                                 {SYMPTOM_OPTIONS.map(sym => (
-                                     <label key={sym} style={{fontSize:"11px", display:"flex", alignItems:"center", gap:"5px"}}>
-                                         <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)} /> {sym}
-                                     </label>
-                                 ))}
-                             </div>
-                         </div>
-
-                         <div>
-                             <label style={{fontSize:"12px", fontWeight:"bold"}}>Diagnosis</label>
-                             <select required value={consultData.diagnosis} onChange={e => setConsultData({...consultData, diagnosis: e.target.value})} style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ccc"}}>
-                                 <option value="">Select Diagnosis</option>
-                                 {DIAGNOSIS_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
-                             </select>
-                         </div>
-
-                         <div>
-                             <label style={{fontSize:"12px", fontWeight:"bold"}}>Prescription / Medicine</label>
-                             <textarea value={consultData.medicine} onChange={e => setConsultData({...consultData, medicine: e.target.value})} rows="2" style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ccc"}} placeholder="e.g. Doxycycline 100mg 2x a day..."></textarea>
-                         </div>
-
-                         <div>
-                             <label style={{fontSize:"12px", fontWeight:"bold"}}>Veterinarian Notes</label>
-                             <textarea value={consultData.notes} onChange={e => setConsultData({...consultData, notes: e.target.value})} rows="2" style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ccc"}} placeholder="Additional observations..."></textarea>
-                         </div>
-
-                         <div>
-                             <label style={{fontSize:"12px", fontWeight:"bold"}}>Schedule Follow-up (Optional)</label>
-                             <input type="date" value={consultData.followUp} onChange={e => setConsultData({...consultData, followUp: e.target.value})} style={{width:"100%", padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} />
-                         </div>
-
-                         <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                             <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"12px", borderRadius:"6px", fontWeight:"bold", cursor:"pointer"}}>Save & Finish</button>
-                             <button type="button" onClick={() => setShowConsultModal(false)} style={{flex:1, background:"#eee", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                         </div>
-                     </form>
-                 </div>
-             </div>
-         )}
-
-         {viewingPet && (
-             <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.7)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-                 <div style={{background:"white", width:"600px", maxHeight:"80vh", borderRadius:"12px", overflow:"hidden", display:"flex", flexDirection:"column"}}>
-                     <div style={{padding:"20px", background:"#673AB7", color:"white"}}>
-                         <h2 style={{margin:0}}>{viewingPet.name}</h2>
-                         <div style={{fontSize:"14px", opacity:0.9}}>Owner: {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</div>
-                         <div style={{fontSize:"13px", color:"#eee"}}>📞 {owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || owners.find(o => o.id === viewingPet.ownerId)?.contactNumber || "No Phone"}</div>
-                     </div>
-                     <div style={{flex:1, overflowY:"auto", padding:"20px"}}>
-                         <h4>Medical History</h4>
-                         {appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").length === 0 ? <p style={{color:"#888"}}>No completed visits yet.</p> : (
-                             appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").map(a => (
-                                 <div key={a.id} style={{padding:"10px", borderBottom:"1px solid #f0f0f0", fontSize:"13px"}}>
-                                     <div style={{fontWeight:"bold"}}>{a.date} - {a.reason}</div>
-                                     <div style={{color:"#555", marginTop:"2px"}}><strong>Sx:</strong> {a.symptoms || "N/A"}</div>
-                                     <div style={{color:"#555"}}><strong>Dx:</strong> {a.diagnosis}</div>
-                                     <div style={{color:"#555"}}><strong>Rx:</strong> {a.medicine}</div>
-                                     <div style={{color:"#777", fontStyle:"italic", fontSize:"12px"}}><strong>Notes:</strong> {a.notes || "N/A"}</div>
-                                 </div>
-                             ))
-                         )}
-                     </div>
-                     <button onClick={() => setViewingPet(null)} style={{width:"100%", marginTop:"20px", padding:"10px", background:"#eee", border:"none", borderRadius:"8px", cursor: "pointer"}}>Close</button>
-                 </div>
-             </div>
-         )}
-         
-         {/* --- REPORT DETAIL MODAL --- */}
-         {reportDetailModal && (
-            <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.6)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-                 <div style={{background:"white", width:"600px", maxHeight:"80vh", borderRadius:"12px", overflow:"hidden", display:"flex", flexDirection:"column"}}>
-                     <div style={{padding:"15px 20px", background:"#1565C0", color:"white", display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-                         <h3 style={{margin:0}}>{reportDetailModal.title}</h3>
-                         <button onClick={() => setReportDetailModal(null)} style={{background:"none", border:"none", color:"white", fontSize:"20px", cursor:"pointer"}}>✕</button>
-                     </div>
-                     <div style={{flex:1, overflowY:"auto", padding:"0"}}>
-                         {reportDetailModal.data.length === 0 ? <p style={{padding:"20px", textAlign:"center", color:"#999"}}>No records found.</p> : (
-                             <table style={{width:"100%", borderCollapse:"collapse", fontSize:"13px"}}>
-                                 <thead style={{background:"#f5f5f5", textAlign:"left"}}>
-                                     <tr>
-                                         {reportDetailModal.type === 'appointments' ? (
-                                            <>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Date</th>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Pet & Owner</th>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Type</th>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Status</th>
-                                            </>
-                                         ) : reportDetailModal.type === 'lowstock' || reportDetailModal.type === 'expired' ? (
-                                             <>
-                                                 <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Item Name</th>
-                                                 <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Quantity</th>
-                                                 <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>{reportDetailModal.type === 'lowstock' ? 'Threshold' : 'Expiry Date'}</th>
-                                             </>
-                                         ) : (
-                                            <>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Date</th>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Item Name</th>
-                                                <th style={{padding:"10px", borderBottom:"1px solid #eee"}}>Qty {reportDetailModal.type==='added'?'Added':'Used'}</th>
-                                            </>
-                                         )}
-                                     </tr>
-                                 </thead>
-                                 <tbody>
-                                     {reportDetailModal.data.map((row, idx) => {
-                                         // Render logic based on type
-                                         if (reportDetailModal.type === 'appointments') {
-                                             const owner = owners.find(o => o.id === row.ownerId);
-                                             return (
-                                                 <tr key={idx} style={{borderBottom:"1px solid #f0f0f0"}}>
-                                                     <td style={{padding:"10px"}}>{row.date}</td>
-                                                     <td style={{padding:"10px"}}>
-                                                         <strong>{row.petName}</strong> <br/>
-                                                         <span style={{fontSize:"11px", color:"#666"}}>{owner?.firstName} {owner?.lastName}</span>
-                                                     </td>
-                                                     <td style={{padding:"10px"}}>{row.reason}</td>
-                                                     <td style={{padding:"10px"}}>
-                                                         <span style={{padding:"2px 6px", borderRadius:"4px", fontSize:"10px", 
-                                                             background:row.status==='Done'?'#e3f2fd':row.status==='Cancelled'?'#ffebee':'#fff3e0',
-                                                             color:row.status==='Done'?'#2196F3':row.status==='Cancelled'?'#c62828':'#ef6c00'}}>
-                                                             {row.status}
-                                                         </span>
-                                                     </td>
-                                                 </tr>
-                                             );
-                                         } else if (reportDetailModal.type === 'lowstock' || reportDetailModal.type === 'expired') {
-                                             return (
-                                                 <tr key={idx} style={{borderBottom:"1px solid #f0f0f0"}}>
-                                                     <td style={{padding:"10px"}}><strong>{row.name}</strong></td>
-                                                     <td style={{padding:"10px"}}>{row.quantity} {row.unit}</td>
-                                                     <td style={{padding:"10px", color: reportDetailModal.type === 'expired' ? 'red' : 'orange'}}>
-                                                         {reportDetailModal.type === 'lowstock' ? (row.threshold || 5) : (row.expiryDate || "N/A")}
-                                                     </td>
-                                                 </tr>
-                                             );
-                                         } else {
-                                             // Inventory Logs (Added / Used)
-                                             return (
-                                                 <tr key={idx} style={{borderBottom:"1px solid #f0f0f0"}}>
-                                                     <td style={{padding:"10px"}}>{normalizeDate(row.date)}</td>
-                                                     <td style={{padding:"10px"}}><strong>{row.itemName}</strong></td>
-                                                     <td style={{padding:"10px", fontWeight:"bold", color: reportDetailModal.type==='added'?'green':'red'}}>
-                                                         {reportDetailModal.type==='added' ? '+' : '-'}{row.qty || row.change}
-                                                     </td>
-                                                 </tr>
-                                             );
-                                         }
-                                     })}
-                                 </tbody>
-                             </table>
-                         )}
-                     </div>
-                     <div style={{padding:"10px", background:"#f5f5f5", textAlign:"right"}}>
-                         <button onClick={() => setReportDetailModal(null)} style={{padding:"8px 15px", background:"#ccc", border:"none", borderRadius:"4px", cursor:"pointer"}}>Close</button>
-                     </div>
-                 </div>
-            </div>
-         )}
-
+                                {/* Appointments Stats Block */}
+                                <div style={{background:"white", borderRadius:"12px", border:"1px solid #eee", padding:"20px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
+                                    <h3 style={{marginTop:0, borderBottom:"2px solid #4CAF50", paddingBottom:"10px", color:"#4CAF50"}}>Appointment Stats</h3>
+                                    <div onClick={() => handleReportClick('appointments')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer"}} onMouseOver={e=>e.currentTarget.style.background="#f9f9f9"} onMouseOut={e=>e.currentTarget.style.background="white"}>
+                                        <span>Total Scheduled:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{generatedStats.totalAppointments}</span>
+                                    </div>
+                                    <div style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1"}}>
+                                        <span>✅ Completed:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px", color:"#4CAF50"}}>{generatedStats.completedAppointments}</span>
+                                    </div>
+                                    <div style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1"}}>
+                                        <span>❌ Cancelled / Missed:</span>
+                                        <span style={{fontWeight:"bold", fontSize:"18px", color:"#f44336"}}>{generatedStats.cancelledAppointments}</span>
+                                    </div>
+                                    
+                                    <div style={{marginTop:"15px"}}>
+                                        <h4 style={{margin:"0 0 10px 0", fontSize:"14px", color:"#666"}}>Service Breakdown:</h4>
+                                        <div style={{display:"flex", flexWrap:"wrap", gap:"5px"}}>
+                                            {Object.entries(serviceBreakdown).map(([key, val]) => (
+                                                <span key={key} style={{background:"#e3f2fd", color:"#1565C0", padding:"4px 8px", borderRadius:"4px", fontSize:"12px"}}>{key}: {val}</span>
+                                            ))}
+                                            {Object.keys(serviceBreakdown).length === 0 && <span style={{color:"#999", fontSize:"12px"}}>No data</span>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ) : (
+                            <div style={{textAlign:"center", color:"#888", padding:"50px", border:"2px dashed #ddd", borderRadius:"12px"}}>
+                                Please select a date range to generate the report.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+            
+        </div>
       </main>
+
+      {/* --- MODALS --- */}
+      {/* 1. Walk In Modal */}
+      {showWalkInModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%"}}>
+                  <h3 style={{marginTop:0}}>New Walk-In Appointment</h3>
+                  <form onSubmit={handleCreateWalkIn} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
+                      <select required value={walkInData.ownerId} onChange={e => setWalkInData({...walkInData, ownerId: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                          <option value="">Select Owner</option>
+                          {owners.map(o => <option key={o.id} value={o.id}>{o.firstName} {o.lastName}</option>)}
+                      </select>
+                      {walkInData.ownerId && (
+                           <select required value={walkInData.petId} onChange={e => {
+                               const pet = allPets.find(p => p.id === e.target.value);
+                               setWalkInData({...walkInData, petId: e.target.value, petName: pet?.name || ""});
+                           }} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                              <option value="">Select Pet</option>
+                              {allPets.filter(p => p.ownerId === walkInData.ownerId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                           </select>
+                      )}
+                      <input type="date" required value={walkInData.date} onChange={e => setWalkInData({...walkInData, date: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                      <input type="time" required value={walkInData.time} onChange={e => setWalkInData({...walkInData, time: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                      <select required value={walkInData.reason} onChange={e => setWalkInData({...walkInData, reason: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                          <option value="">Select Reason</option>
+                          {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
+                          <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Book</button>
+                          <button type="button" onClick={() => setShowWalkInModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
+
+      {/* 2. Consultation Modal */}
+      {showConsultModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"600px", maxWidth:"95%", maxHeight:"90vh", overflowY:"auto"}}>
+                  <h3 style={{marginTop:0, color:"#2196F3"}}>Consultation Form</h3>
+                  <form onSubmit={handleFinishConsultation} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
+                      <div style={{display:"flex", gap:"15px"}}>
+                          <label style={{flex:1}}><strong>Date:</strong><br/><input type="date" value={consultData.date} onChange={e => setConsultData({...consultData, date: e.target.value})} style={{width:"100%", padding:"8px", marginTop:"5px"}} /></label>
+                          <label style={{flex:1}}><strong>Reason:</strong><br/><input type="text" value={consultData.reason} readOnly style={{width:"100%", padding:"8px", marginTop:"5px", background:"#f5f5f5"}} /></label>
+                      </div>
+                      
+                      <div>
+                          <strong>Symptoms:</strong>
+                          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"5px", maxHeight:"100px", overflowY:"auto", border:"1px solid #ddd", padding:"10px", marginTop:"5px", borderRadius:"6px"}}>
+                              {SYMPTOM_OPTIONS.map(sym => (
+                                  <label key={sym} style={{display:"flex", alignItems:"center", gap:"5px", fontSize:"13px"}}>
+                                      <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)} /> {sym}
+                                  </label>
+                              ))}
+                          </div>
+                      </div>
+
+                      <label><strong>Diagnosis:</strong><br/>
+                        <input list="diagnosis-options" value={consultData.diagnosis} onChange={e => setConsultData({...consultData, diagnosis: e.target.value})} placeholder="Select or Type Diagnosis" style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                        <datalist id="diagnosis-options">{DIAGNOSIS_OPTIONS.map(d => <option key={d} value={d} />)}</datalist>
+                      </label>
+
+                      <label><strong>Treatment / Medicine:</strong><br/>
+                        <textarea value={consultData.medicine} onChange={e => setConsultData({...consultData, medicine: e.target.value})} rows="2" style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} placeholder="Prescribed meds or procedures..." />
+                      </label>
+
+                      <label><strong>Notes:</strong><br/>
+                        <textarea value={consultData.notes} onChange={e => setConsultData({...consultData, notes: e.target.value})} rows="2" style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} placeholder="Additional observations..." />
+                      </label>
+
+                      <label style={{background:"#e3f2fd", padding:"10px", borderRadius:"6px"}}>
+                          <strong>Schedule Follow-up (Optional):</strong><br/>
+                          <input type="date" value={consultData.followUp} onChange={e => setConsultData({...consultData, followUp: e.target.value})} style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #bbb"}} />
+                      </label>
+
+                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
+                          <button type="submit" style={{flex:1, background:"#4CAF50", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>Finish Consultation</button>
+                          <button type="button" onClick={() => setShowConsultModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
+
+      {/* 3. Inventory Add/Edit Modal */}
+      {showInventoryModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px"}}>
+                  <h3 style={{marginTop:0}}>{editingInventoryId ? "Edit Item" : "Add New Item"}</h3>
+                  <form onSubmit={handleSaveInventory} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
+                      <input type="text" required placeholder="Item Name" value={inventoryData.name} onChange={e => setInventoryData({...inventoryData, name: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                      <select required value={inventoryData.category} onChange={e => setInventoryData({...inventoryData, category: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                          <option value="">Select Category</option>
+                          {INVENTORY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                      <div style={{display:"flex", gap:"10px"}}>
+                          <input type="number" required placeholder="Qty" value={inventoryData.quantity} onChange={e => setInventoryData({...inventoryData, quantity: Number(e.target.value)})} style={{flex:1, padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                          <select value={inventoryData.unit} onChange={e => setInventoryData({...inventoryData, unit: e.target.value})} style={{width:"80px", padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                              {INVENTORY_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                      </div>
+                      <label style={{fontSize:"13px", color:"#666"}}>Expiry Date (Optional):
+                          <input type="date" value={inventoryData.expiryDate} onChange={e => setInventoryData({...inventoryData, expiryDate: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                      </label>
+                      <label style={{fontSize:"13px", color:"#666"}}>Low Stock Threshold:
+                          <input type="number" value={inventoryData.threshold} onChange={e => setInventoryData({...inventoryData, threshold: Number(e.target.value)})} style={{width:"100%", padding:"10px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                      </label>
+                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
+                          <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>{editingInventoryId ? "Update" : "Add"}</button>
+                          <button type="button" onClick={() => setShowInventoryModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
+                      </div>
+                  </form>
+              </div>
+          </div>
+      )}
+
+      {/* 4. Report Details Modal */}
+      {reportDetailModal && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"600px", maxHeight:"80vh", overflowY:"auto"}}>
+                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px"}}>
+                      <h3 style={{margin:0}}>{reportDetailModal.title}</h3>
+                      <button onClick={() => setReportDetailModal(null)} style={{background:"none", border:"none", fontSize:"20px", cursor:"pointer"}}>✕</button>
+                  </div>
+                  <table style={{width:"100%", borderCollapse:"collapse", fontSize:"14px"}}>
+                      <thead>
+                          <tr style={{background:"#f5f5f5", textAlign:"left"}}>
+                              <th style={{padding:"8px"}}>Date / Name</th>
+                              <th style={{padding:"8px"}}>Details</th>
+                              {(reportDetailModal.type === 'added' || reportDetailModal.type === 'used') && <th style={{padding:"8px"}}>Qty</th>}
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {reportDetailModal.data.length === 0 ? <tr><td colSpan="3" style={{padding:"20px", textAlign:"center", color:"#999"}}>No data found</td></tr> : 
+                           reportDetailModal.data.map((item, i) => (
+                               <tr key={i} style={{borderBottom:"1px solid #eee"}}>
+                                   <td style={{padding:"8px"}}>
+                                       {reportDetailModal.type.includes('appointments') ? item.date : (item.date ? item.date.toLocaleDateString() : item.name)}
+                                   </td>
+                                   <td style={{padding:"8px"}}>
+                                       {reportDetailModal.type.includes('appointments') ? `${item.petName} (${item.reason})` : (item.itemName || item.category)}
+                                       {item.reason && <div style={{fontSize:"11px", color:"#777"}}>{item.reason}</div>}
+                                   </td>
+                                   {(reportDetailModal.type === 'added' || reportDetailModal.type === 'used') && (
+                                       <td style={{padding:"8px", fontWeight:"bold"}}>{item.change ? Math.abs(item.change) : item.qty}</td>
+                                   )}
+                               </tr>
+                           ))
+                          }
+                      </tbody>
+                  </table>
+                  <div style={{marginTop:"20px", textAlign:"right"}}>
+                       <button onClick={() => setReportDetailModal(null)} style={{background:"#ccc", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>Close</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 5. Quick Usage Modal */}
+      {usageModal.show && (
+          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2100}}>
+              <div style={{background:"white", padding:"20px", borderRadius:"12px", width:"300px", textAlign:"center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)"}}>
+                  <h3 style={{margin: "0 0 15px 0", color: "#333"}}>Quick Use: {usageModal.item?.name}</h3>
+                  <div style={{marginBottom:"20px"}}>
+                      <label style={{display:"block", marginBottom:"5px", color:"#666"}}>Quantity to use:</label>
+                      <input type="number" min="1" value={usageModal.qty} onChange={(e) => setUsageModal({ ...usageModal, qty: parseInt(e.target.value) })} style={{padding: "8px", width: "60px", textAlign: "center", fontSize: "16px", border: "1px solid #ccc", borderRadius: "4px"}} />
+                      <span style={{marginLeft:"10px", color:"#555"}}>{usageModal.item?.unit}</span>
+                  </div>
+                  <div style={{display: "flex", justifyContent: "center", gap: "10px"}}>
+                      <button onClick={() => setUsageModal({ show: false, item: null, qty: 1 })} style={{padding: "8px 15px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer"}}>Cancel</button>
+                      <button onClick={confirmQuickUsage} style={{padding: "8px 15px", background: "#FF9800", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"}}>Confirm</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 6. Custom Confirmation Modal */}
+      {confirmModal.show && (
+          <div className="modal-overlay" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000}}>
+              <div style={{
+                  background: "white", padding: "25px", borderRadius: "12px", width: "350px", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)"
+              }}>
+                  <h3 style={{margin: "0 0 15px 0", color: "#333"}}>Confirmation</h3>
+                  <p style={{marginBottom: "25px", fontSize: "16px", color: "#666"}}>{confirmModal.message}</p>
+                  
+                  <div style={{display: "flex", justifyContent: "center", gap: "15px"}}>
+                      <button 
+                          onClick={() => setConfirmModal({ ...confirmModal, show: false })} 
+                          style={{
+                              padding: "10px 20px", background: "#e0e0e0", color: "#333", 
+                              border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"
+                          }}
+                      >
+                          Cancel
+                      </button>
+                      <button 
+                          onClick={() => { confirmModal.onConfirm(); setConfirmModal({ ...confirmModal, show: false }); }} 
+                          style={{
+                              padding: "10px 20px", background: "#f44336", color: "white", 
+                              border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"
+                          }}
+                      >
+                          Yes
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 };

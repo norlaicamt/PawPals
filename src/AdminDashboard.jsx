@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { auth, db } from "./firebase";
-import { signOut, sendPasswordResetEmail } from "firebase/auth";
+import { signOut } from "firebase/auth";
 import { collection, onSnapshot, doc, query, orderBy, updateDoc } from "firebase/firestore"; 
 import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png"; 
@@ -20,7 +20,7 @@ const SimpleBarChart = ({ data, title }) => {
     const [hoverIndex, setHoverIndex] = useState(null);
 
     return (
-        <div className="no-print" style={{ background: "white", padding: "15px", borderRadius: "12px", boxShadow: "0 2px 5px rgba(0,0,0,0.05)", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", border: "1px solid #eee" }}>
+        <div className="no-print" style={{ background: "white", padding: "15px", borderRadius: "12px", height: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", border: "1px solid #eee" }}>
             <h4 style={{ margin: "0 0 10px 0", color: "#333", borderBottom:"1px solid #f0f0f0", paddingBottom:"10px", fontSize: "16px", textAlign: "center" }}>📊 {title}</h4>
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: "auto", maxHeight: "100%" }}>
@@ -73,7 +73,7 @@ const AdminDashboard = () => {
   const [archivedPets, setArchivedPets] = useState([]);
 
   // --- UI STATES ---
-  const [activeView, setActiveView] = useState("overview"); // Default to Overview
+  const [activeView, setActiveView] = useState("overview"); 
   const [userTab, setUserTab] = useState("owner");
   const [userSearch, setUserSearch] = useState("");
   const [petSearch, setPetSearch] = useState("");
@@ -118,7 +118,7 @@ const AdminDashboard = () => {
       return () => { unsubUsers(); unsubPets(); unsubAppts(); };
   }, []);
 
-  // Updated Stats for Overview
+  // Stats for Overview
   const stats = {
     totalOwners: users.filter(u => u.role === "owner" && !u.isDisabled).length,
     totalPets: pets.length,
@@ -207,17 +207,13 @@ const AdminDashboard = () => {
           setShowPrintModal(true);
       } else {
           setIsPrintingAppointments(true);
-          setTimeout(() => {
-              window.print();
-          }, 300);
+          setTimeout(() => { window.print(); }, 300);
       }
   };
 
   const executePrint = () => {
       setShowPrintModal(false);
-      setTimeout(() => {
-          window.print();
-      }, 500);
+      setTimeout(() => { window.print(); }, 500);
   };
 
   // --- FILTERS & CALCULATIONS ---
@@ -229,7 +225,14 @@ const AdminDashboard = () => {
          u.lastName?.toLowerCase().includes(userSearch.toLowerCase()) || 
          u.email?.toLowerCase().includes(userSearch.toLowerCase()))
       );
-      return userTab === "disabled" ? filtered.filter(u => u.isDisabled === true) : filtered.filter(u => u.role === userTab && !u.isDisabled);
+
+      if (userTab === "disabled") {
+          return filtered.filter(u => u.isDisabled === true);
+      } else if (userTab === "staff_admin") {
+          return filtered.filter(u => (u.role === "admin" || u.role === "staff") && !u.isDisabled);
+      } else {
+          return filtered.filter(u => u.role === userTab && !u.isDisabled);
+      }
   };
 
   const filteredPets = pets.filter(p => {
@@ -242,7 +245,6 @@ const AdminDashboard = () => {
     return matchesSearch && matchesSpecies;
   });
 
-  // ALPHABETICAL PETS FOR RECORDS
   const sortedPetsForRecords = [...pets]
     .filter(p => p.name.toLowerCase().includes(recordPetSearch.toLowerCase()))
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -268,21 +270,23 @@ const AdminDashboard = () => {
 
   return (
     <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
-      <nav className="navbar no-print" style={{ flexShrink: 0 }}>
-        <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Admin</div>
-        <button onClick={handleLogout} className="action-btn" style={{background: "#ffebee", color: "#d32f2f"}}>Logout</button>
+      <nav className="navbar no-print" style={{ flexShrink: 0, background: "white", padding: "15px 30px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #eee" }}>
+        <div className="logo" style={{display: "flex", alignItems: "center", gap: "10px", fontWeight: "bold", fontSize: "1.2rem", color: "#2196F3"}}>
+            <img src={logoImg} alt="PawPals" className="logo-img" style={{height: "35px"}} /> PawPals Admin
+        </div>
+        <button onClick={handleLogout} className="action-btn" style={{background: "#ffebee", color: "#d32f2f", border: "none", padding: "10px 20px", borderRadius: "8px", fontWeight: "bold", cursor: "pointer", transition: "0.2s"}}>Logout</button>
       </nav>
 
       <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
         
         {/* Navigation Tabs */}
         <div className="no-print" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "15px", marginBottom: "20px", flexShrink: 0 }}>
-          <button style={getTabStyle("overview")} onClick={() => setActiveView("overview")}>🏠 Overview</button>
-          <button style={getTabStyle("accounts")} onClick={() => setActiveView("accounts")}>👥 Accounts</button>
-          <button style={getTabStyle("pets")} onClick={() => setActiveView("pets")}>🐾 Pets List</button>
-          <button style={getTabStyle("records")} onClick={() => setActiveView("records")}>📊 Records</button>
+          <button style={getTabStyle("overview")} onClick={() => setActiveView("overview")}>Overview</button>
+          <button style={getTabStyle("accounts")} onClick={() => setActiveView("accounts")}>Accounts</button>
+          <button style={getTabStyle("pets")} onClick={() => setActiveView("pets")}>Pets List</button>
+          <button style={getTabStyle("records")} onClick={() => setActiveView("records")}>Records</button>
           <button style={getTabStyle("archive")} onClick={() => setActiveView("archive")}>
-            📦 Archive {stats.pendingDeletions > 0 && <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 6px", fontSize:"10px", verticalAlign:"middle"}}>!</span>}
+            Archive {stats.pendingDeletions > 0 && <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 6px", fontSize:"10px", verticalAlign:"middle", marginLeft:"5px"}}>!</span>}
           </button>
         </div>
 
@@ -292,30 +296,32 @@ const AdminDashboard = () => {
           {activeView === "overview" && (
             <div className="no-print" style={{ display: "flex", flexDirection: "column", gap: "20px", height: "100%", overflowY: "auto", paddingRight: "5px" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "20px" }}>
-                    <div className="card" style={{ padding: "20px", borderLeft: "5px solid #2196F3", display: "flex", flexDirection: "column" }}>
+                    <div className="card" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", padding: "20px", borderLeft: "5px solid #2196F3", display: "flex", flexDirection: "column" }}>
                         <span style={{ color: "#666", fontSize: "14px", fontWeight: "bold" }}>Total Registered Owners</span>
                         <span style={{ fontSize: "28px", fontWeight: "bold", marginTop: "5px" }}>{stats.totalOwners}</span>
                     </div>
-                    <div className="card" style={{ padding: "20px", borderLeft: "5px solid #4CAF50", display: "flex", flexDirection: "column" }}>
+                    <div className="card" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", padding: "20px", borderLeft: "5px solid #4CAF50", display: "flex", flexDirection: "column" }}>
                         <span style={{ color: "#666", fontSize: "14px", fontWeight: "bold" }}>Total Active Pets</span>
                         <span style={{ fontSize: "28px", fontWeight: "bold", marginTop: "5px" }}>{stats.totalPets}</span>
                     </div>
-                    <div className="card" style={{ padding: "20px", borderLeft: "5px solid #9C27B0", display: "flex", flexDirection: "column" }}>
+                    <div className="card" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", padding: "20px", borderLeft: "5px solid #9C27B0", display: "flex", flexDirection: "column" }}>
                         <span style={{ color: "#666", fontSize: "14px", fontWeight: "bold" }}>Total Appointments</span>
                         <span style={{ fontSize: "28px", fontWeight: "bold", marginTop: "5px" }}>{stats.totalAppointments}</span>
                     </div>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", flex: 1, minHeight: "350px" }}>
-                    <SimpleBarChart data={breedChartData} title="Pet Breed Distribution" />
-                    <div className="card" style={{ padding: "20px", display: "flex", flexDirection: "column" }}>
-                        <h4 style={{ margin: "0 0 15px 0", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>System Quick Stats</h4>
+                    <div style={{background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", overflow: "hidden"}}>
+                        <SimpleBarChart data={breedChartData} title="Pet Breed Distribution" />
+                    </div>
+                    <div className="card" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", padding: "20px", display: "flex", flexDirection: "column" }}>
+                        <h4 style={{ margin: "0 0 15px 0", borderBottom: "1px solid #eee", paddingBottom: "10px", color: "#333" }}>System Quick Stats</h4>
                         <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "12px" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px", background: "#f9f9f9", borderRadius: "8px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", padding: "15px", background: "#f9f9f9", borderRadius: "8px", border: "1px solid #eee" }}>
                                 <span>Pending Archive Requests</span>
                                 <b style={{ color: stats.pendingDeletions > 0 ? "red" : "#333" }}>{stats.pendingDeletions}</b>
                             </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px", background: "#f9f9f9", borderRadius: "8px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", padding: "15px", background: "#f9f9f9", borderRadius: "8px", border: "1px solid #eee" }}>
                                 <span>Completed Appointments</span>
                                 <b style={{ color: "#4CAF50" }}>{stats.completedAppointments}</b>
                             </div>
@@ -327,34 +333,39 @@ const AdminDashboard = () => {
 
           {/* --- ACCOUNTS VIEW --- */}
           {activeView === "accounts" && (
-            <div className="card no-print" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+            <div className="card no-print" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", height: "100%", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
                 <div style={{ display: "flex", gap: "10px" }}>
-                  <button onClick={() => setUserTab("owner")} style={{ padding: "8px 16px", borderRadius: "20px", border: "none", background: userTab === "owner" ? "#2196F3" : "#eee", color: userTab === "owner" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Pet Owners</button>
-                  <button onClick={() => setUserTab("admin")} style={{ padding: "8px 16px", borderRadius: "20px", border: "none", background: userTab === "admin" ? "#2196F3" : "#eee", color: userTab === "admin" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Admins</button>
-                  <button onClick={() => setUserTab("disabled")} style={{ padding: "8px 16px", borderRadius: "20px", border: "none", background: userTab === "disabled" ? "#d32f2f" : "#eee", color: userTab === "disabled" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Disabled</button>
+                  <button onClick={() => setUserTab("owner")} style={{ padding: "8px 16px", borderRadius: "20px", border: "none", background: userTab === "owner" ? "#2196F3" : "#f1f1f1", color: userTab === "owner" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Pet Owners</button>
+                  <button onClick={() => setUserTab("staff_admin")} style={{ padding: "8px 16px", borderRadius: "20px", border: "none", background: userTab === "staff_admin" ? "#2196F3" : "#f1f1f1", color: userTab === "admin" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Staff/Admin</button>
+                  <button onClick={() => setUserTab("disabled")} style={{ padding: "8px 16px", borderRadius: "20px", border: "none", background: userTab === "disabled" ? "#d32f2f" : "#ffebee", color: userTab === "disabled" ? "white" : "#d32f2f", cursor: "pointer", fontWeight: "bold" }}>Disabled</button>
                 </div>
-                <input type="text" placeholder="Search accounts..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="search-input" style={{ width: "250px", marginBottom: 0 }} />
+                <input type="text" placeholder="Search accounts..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="search-input" style={{ width: "250px", padding: "10px", border: "1px solid #ddd", borderRadius: "8px", outline: "none" }} />
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: "0 20px" }}>
-                <table className="admin-table">
-                  <thead>
-                    <tr><th>Name</th><th>Email</th><th>Status</th><th>Actions</th></tr>
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead style={{ position: "sticky", top: 0, background: "white", boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                    <tr style={{ textAlign: "left", color: "#666" }}>
+                        <th style={{ padding: "15px" }}>Name</th>
+                        <th style={{ padding: "15px" }}>Email</th>
+                        <th style={{ padding: "15px" }}>Status</th>
+                        <th style={{ padding: "15px" }}>Actions</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {getFilteredUsers().map(user => (
-                      <tr key={user.id}>
-                        <td style={{ fontWeight: "bold" }}>{user.firstName} {user.lastName}</td>
-                        <td>{user.email}</td>
-                        <td>
+                      <tr key={user.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                        <td style={{ padding: "15px", fontWeight: "bold" }}>{user.firstName} {user.lastName}</td>
+                        <td style={{ padding: "15px" }}>{user.email}</td>
+                        <td style={{ padding: "15px" }}>
                           <span style={{ padding: "4px 10px", borderRadius: "12px", fontSize: "12px", background: user.isDisabled ? "#ffebee" : "#e8f5e9", color: user.isDisabled ? "#d32f2f" : "#2e7d32", fontWeight: "bold" }}>
                             {user.isDisabled ? "Disabled" : "Active"}
                           </span>
                         </td>
-                        <td>
-                          <div style={{ display: "flex", gap: "5px" }}>
-                            <button onClick={() => handleEditUser(user)} className="action-btn" style={{ padding: "5px 10px", fontSize: "12px", background: "#f0f0f0", color: "#333" }}>Edit</button>
-                            <button onClick={() => handleToggleUserStatus(user.id, user.isDisabled)} className="action-btn" style={{ padding: "5px 10px", fontSize: "12px", background: user.isDisabled ? "#4CAF50" : "#f44336", color: "white" }}>
+                        <td style={{ padding: "15px" }}>
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button onClick={() => handleEditUser(user)} style={{ padding: "6px 12px", fontSize: "12px", background: "none", border: "1px solid #2196F3", color: "#2196F3", borderRadius: "6px", cursor: "pointer" }}>Edit</button>
+                            <button onClick={() => handleToggleUserStatus(user.id, user.isDisabled)} style={{ padding: "6px 12px", fontSize: "12px", background: user.isDisabled ? "#4CAF50" : "#f44336", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>
                               {user.isDisabled ? "Enable" : "Disable"}
                             </button>
                           </div>
@@ -369,32 +380,37 @@ const AdminDashboard = () => {
 
           {/* --- PETS LIST VIEW --- */}
           {activeView === "pets" && (
-            <div className="card no-print" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+            <div className="card no-print" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", height: "100%", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
                   <h3 style={{ margin: 0 }}>Active Pets</h3>
-                  <select value={speciesFilter} onChange={(e) => setSpeciesFilter(e.target.value)} style={{ padding: "8px", borderRadius: "8px", border: "1px solid #ccc" }}>
+                  <select value={speciesFilter} onChange={(e) => setSpeciesFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", marginLeft: "15px" }}>
                     <option value="All">All Species</option>
                     <option value="Dog">Dogs</option>
                     <option value="Cat">Cats</option>
                     <option value="Other">Others</option>
                   </select>
                 </div>
-                <input type="text" placeholder="Search pet or owner..." value={petSearch} onChange={(e) => setPetSearch(e.target.value)} className="search-input" style={{ width: "250px", marginBottom: 0 }} />
+                <input type="text" placeholder="Search pet or owner..." value={petSearch} onChange={(e) => setPetSearch(e.target.value)} className="search-input" style={{ width: "250px", padding: "10px", border: "1px solid #ddd", borderRadius: "8px", outline: "none" }} />
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: "0 20px" }}>
-                <table className="admin-table">
-                  <thead>
-                    <tr><th>Pet Name</th><th>Species/Breed</th><th>Owner</th><th>Actions</th></tr>
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead style={{ position: "sticky", top: 0, background: "white", boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                    <tr style={{ textAlign: "left", color: "#666" }}>
+                        <th style={{ padding: "15px" }}>Pet Name</th>
+                        <th style={{ padding: "15px" }}>Species/Breed</th>
+                        <th style={{ padding: "15px" }}>Owner</th>
+                        <th style={{ padding: "15px" }}>Actions</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {filteredPets.map(pet => (
-                      <tr key={pet.id}>
-                        <td style={{ fontWeight: "bold" }}>{pet.name}</td>
-                        <td>{pet.species} ({pet.breed})</td>
-                        <td>{users.find(u => u.id === pet.ownerId)?.firstName || "Unknown"}</td>
-                        <td>
-                          <button onClick={() => handleManualArchive(pet.id)} className="action-btn" style={{ padding: "5px 12px", background: "#eee", color: "#666" }}>Archive</button>
+                      <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                        <td style={{ padding: "15px", fontWeight: "bold" }}>{pet.name}</td>
+                        <td style={{ padding: "15px" }}>{pet.species} ({pet.breed})</td>
+                        <td style={{ padding: "15px" }}>{users.find(u => u.id === pet.ownerId)?.firstName || "Unknown"}</td>
+                        <td style={{ padding: "15px" }}>
+                          <button onClick={() => handleManualArchive(pet.id)} style={{ padding: "6px 12px", background: "#eee", color: "#666", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}>Archive</button>
                         </td>
                       </tr>
                     ))}
@@ -406,13 +422,13 @@ const AdminDashboard = () => {
 
           {/* --- RECORDS VIEW --- */}
           {activeView === "records" && (
-            <div className="card no-print" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+            <div className="card no-print" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", height: "100%", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0 }}>
                 <div style={{ display: "flex", gap: "10px" }}>
-                  <button onClick={() => setRecordTab("pets")} style={{ padding: "10px 20px", borderRadius: "8px", border: "none", background: recordTab === "pets" ? "#2196F3" : "#f5f5f5", color: recordTab === "pets" ? "white" : "#333", cursor: "pointer", fontWeight: "bold" }}>🐾 Pet History</button>
-                  <button onClick={() => setRecordTab("appointments")} style={{ padding: "10px 20px", borderRadius: "8px", border: "none", background: recordTab === "appointments" ? "#2196F3" : "#f5f5f5", color: recordTab === "appointments" ? "white" : "#333", cursor: "pointer", fontWeight: "bold" }}>📅 Appointment History</button>
+                  <button onClick={() => setRecordTab("pets")} style={{ padding: "10px 20px", borderRadius: "20px", border: "none", background: recordTab === "pets" ? "#2196F3" : "#f5f5f5", color: recordTab === "pets" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Pet History</button>
+                  <button onClick={() => setRecordTab("appointments")} style={{ padding: "10px 20px", borderRadius: "20px", border: "none", background: recordTab === "appointments" ? "#2196F3" : "#f5f5f5", color: recordTab === "appointments" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Appointment History</button>
                 </div>
-                <button onClick={handlePrintButtonClick} className="action-btn" style={{ background: "#4CAF50", color: "white", padding: "10px 25px" }}>🖨️ Print Report</button>
+                <button onClick={handlePrintButtonClick} style={{ background: "#4CAF50", color: "white", padding: "10px 25px", border: "none", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Print Report</button>
               </div>
 
               <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
@@ -421,7 +437,7 @@ const AdminDashboard = () => {
                     {/* Left: Scrollable Alphabetical Pet List */}
                     <div style={{ background: "#f9f9f9", borderRadius: "12px", display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid #eee" }}>
                       <div style={{ padding: "15px", borderBottom: "1px solid #ddd" }}>
-                        <input type="text" placeholder="Search pet name..." value={recordPetSearch} onChange={(e) => setRecordPetSearch(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc" }} />
+                        <input type="text" placeholder="Search pet name..." value={recordPetSearch} onChange={(e) => setRecordPetSearch(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc", boxSizing: "border-box" }} />
                       </div>
                       <div style={{ flex: 1, overflowY: "auto" }}>
                         {sortedPetsForRecords.map(pet => (
@@ -450,16 +466,18 @@ const AdminDashboard = () => {
 
                           {/* Medical History Section - Centered */}
                           <div style={{ textAlign: "center" }}>
-                            <h3 style={{ borderBottom: "1px solid #eee", paddingBottom: "10px" }}>Medical History</h3>
+                            <h3 style={{ borderBottom: "1px solid #eee", paddingBottom: "10px", color: "#333" }}>Medical History</h3>
                             {appointments.filter(a => a.petId === viewingRecord.id && a.status === "Done").length > 0 ? (
-                                <table className="admin-table">
-                                    <thead><tr><th>Date</th><th>Service</th><th>Notes/Remarks</th></tr></thead>
+                                <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+                                    <thead style={{background: "#f8f9fa"}}>
+                                        <tr><th style={{padding:"10px"}}>Date</th><th style={{padding:"10px"}}>Service</th><th style={{padding:"10px"}}>Notes/Remarks</th></tr>
+                                    </thead>
                                     <tbody>
                                         {appointments.filter(a => a.petId === viewingRecord.id && a.status === "Done").map(a => (
-                                            <tr key={a.id}>
-                                                <td>{new Date(a.date).toLocaleDateString()}</td>
-                                                <td>{a.reason}</td>
-                                                <td style={{ fontStyle: "italic", color: "#555" }}>{a.notes || "No remarks"}</td>
+                                            <tr key={a.id} style={{borderBottom: "1px solid #eee"}}>
+                                                <td style={{padding:"10px"}}>{new Date(a.date).toLocaleDateString()}</td>
+                                                <td style={{padding:"10px"}}>{a.reason}</td>
+                                                <td style={{padding:"10px", fontStyle: "italic", color: "#555" }}>{a.notes || "No remarks"}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -492,19 +510,24 @@ const AdminDashboard = () => {
                         {uniqueServices.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </div>
-                    <table className="admin-table">
-                      <thead>
-                        <tr><th>Date</th><th>Pet</th><th>Owner</th><th>Service</th><th>Status</th></tr>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead style={{ position: "sticky", top: 0, background: "white", boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                        <tr style={{ textAlign: "left", color: "#666" }}>
+                            <th style={{ padding: "15px" }}>Date</th>
+                            <th style={{ padding: "15px" }}>Pet</th>
+                            <th style={{ padding: "15px" }}>Owner</th>
+                            <th style={{ padding: "15px" }}>Service</th>
+                            <th style={{ padding: "15px" }}>Status</th>
+                        </tr>
                       </thead>
                       <tbody>
                         {filteredAppointments.map(a => (
-                          <tr key={a.id}>
-                            <td>{new Date(a.date).toLocaleDateString()}</td>
-                            {/* FIXED: Check both active and archived pets to prevent N/A names */}
-                            <td style={{ fontWeight: "bold" }}>{[...pets, ...archivedPets].find(p => p.id === a.petId)?.name || "N/A"}</td>
-                            <td>{users.find(u => u.id === a.ownerId)?.firstName || "N/A"}</td>
-                            <td>{a.reason}</td>
-                            <td>
+                          <tr key={a.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                            <td style={{ padding: "15px" }}>{new Date(a.date).toLocaleDateString()}</td>
+                            <td style={{ padding: "15px", fontWeight: "bold" }}>{[...pets, ...archivedPets].find(p => p.id === a.petId)?.name || "N/A"}</td>
+                            <td style={{ padding: "15px" }}>{users.find(u => u.id === a.ownerId)?.firstName || "N/A"}</td>
+                            <td style={{ padding: "15px" }}>{a.reason}</td>
+                            <td style={{ padding: "15px" }}>
                               <span style={{ padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: "bold", background: a.status === "Done" ? "#e8f5e9" : a.status === "Cancelled" ? "#ffebee" : "#fff3e0", color: a.status === "Done" ? "#2e7d32" : a.status === "Cancelled" ? "#d32f2f" : "#ef6c00" }}>{a.status}</span>
                             </td>
                           </tr>
@@ -519,35 +542,41 @@ const AdminDashboard = () => {
 
           {/* --- ARCHIVE VIEW --- */}
           {activeView === "archive" && (
-            <div className="card no-print" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+            <div className="card no-print" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", height: "100%", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "20px", borderBottom: "1px solid #eee" }}>
                 <h3 style={{ margin: 0 }}>Pet Archive & Deletion Requests</h3>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
-                <table className="admin-table">
-                  <thead>
-                    <tr><th>Pet Name</th><th>Owner</th><th>Status</th><th>Reason (if deletion)</th><th>Actions</th></tr>
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead style={{ position: "sticky", top: 0, background: "white", boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                    <tr style={{ textAlign: "left", color: "#666" }}>
+                        <th style={{ padding: "15px" }}>Pet Name</th>
+                        <th style={{ padding: "15px" }}>Owner</th>
+                        <th style={{ padding: "15px" }}>Status</th>
+                        <th style={{ padding: "15px" }}>Reason (if deletion)</th>
+                        <th style={{ padding: "15px" }}>Actions</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {archivedPets.map(pet => (
-                      <tr key={pet.id}>
-                        <td>{pet.name}</td>
-                        <td>{users.find(u => u.id === pet.ownerId)?.firstName || "Unknown"}</td>
-                        <td>
+                      <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                        <td style={{ padding: "15px", fontWeight: "bold" }}>{pet.name}</td>
+                        <td style={{ padding: "15px" }}>{users.find(u => u.id === pet.ownerId)?.firstName || "Unknown"}</td>
+                        <td style={{ padding: "15px" }}>
                           <span style={{ padding: "4px 10px", borderRadius: "12px", fontSize: "11px", fontWeight: "bold", background: pet.deletionStatus === "Pending" ? "#fff3e0" : "#f5f5f5", color: pet.deletionStatus === "Pending" ? "#ef6c00" : "#666" }}>
                             {pet.deletionStatus === "Pending" ? "Deletion Requested" : "Archived"}
                           </span>
                         </td>
-                        <td style={{ fontSize: "12px", maxWidth: "200px" }}>{pet.deletionReason || "N/A"}</td>
-                        <td>
+                        <td style={{ padding: "15px", fontSize: "12px", maxWidth: "200px" }}>{pet.deletionReason || "N/A"}</td>
+                        <td style={{ padding: "15px" }}>
                           <div style={{ display: "flex", gap: "5px" }}>
                             {pet.deletionStatus === "Pending" ? (
                               <>
-                                <button onClick={() => handleApproveDeletion(pet)} className="action-btn" style={{ padding: "5px 10px", fontSize: "11px", background: "#d32f2f", color: "white" }}>Approve</button>
-                                <button onClick={() => handleRejectDeletion(pet.id)} className="action-btn" style={{ padding: "5px 10px", fontSize: "11px", background: "#eee", color: "#333" }}>Reject</button>
+                                <button onClick={() => handleApproveDeletion(pet)} style={{ padding: "6px 12px", fontSize: "11px", background: "#d32f2f", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
+                                <button onClick={() => handleRejectDeletion(pet.id)} style={{ padding: "6px 12px", fontSize: "11px", background: "#eee", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer" }}>Reject</button>
                               </>
                             ) : (
-                              <button onClick={() => handleRestorePet(pet.id)} className="action-btn" style={{ padding: "5px 10px", fontSize: "11px", background: "#4CAF50", color: "white" }}>Restore</button>
+                              <button onClick={() => handleRestorePet(pet.id)} style={{ padding: "6px 12px", fontSize: "11px", background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Restore</button>
                             )}
                           </div>
                         </td>
@@ -565,15 +594,15 @@ const AdminDashboard = () => {
         
         {/* Edit User Modal */}
         {editingUser && (
-          <div className="modal-overlay no-print">
-            <div className="modal-content">
-              <h3>Edit User Details</h3>
+          <div className="modal-overlay no-print" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+            <div className="modal-content" style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", boxShadow: "0 10px 30px rgba(0,0,0,0.3)"}}>
+              <h3 style={{marginTop: 0, color: "#333"}}>Edit User Details</h3>
               <form onSubmit={handleSaveUser}>
-                <input type="text" placeholder="First Name" value={editFormData.firstName} onChange={(e) => setEditFormData({ ...editFormData, firstName: e.target.value })} required />
-                <input type="text" placeholder="Last Name" value={editFormData.lastName} onChange={(e) => setEditFormData({ ...editFormData, lastName: e.target.value })} required style={{ marginTop: "10px" }} />
+                <input type="text" placeholder="First Name" value={editFormData.firstName} onChange={(e) => setEditFormData({ ...editFormData, firstName: e.target.value })} required style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", boxSizing: "border-box"}} />
+                <input type="text" placeholder="Last Name" value={editFormData.lastName} onChange={(e) => setEditFormData({ ...editFormData, lastName: e.target.value })} required style={{ marginTop: "10px", width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", boxSizing: "border-box" }} />
                 <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-                  <button type="submit" className="action-btn" style={{ background: "#2196F3", color: "white", flex: 1 }}>Save Changes</button>
-                  <button type="button" onClick={() => setEditingUser(null)} className="action-btn" style={{ background: "#eee", flex: 1 }}>Cancel</button>
+                  <button type="submit" style={{ padding: "10px 20px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", flex: 1 }}>Save Changes</button>
+                  <button type="button" onClick={() => setEditingUser(null)} style={{ padding: "10px 20px", background: "#eee", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", flex: 1 }}>Cancel</button>
                 </div>
               </form>
             </div>
@@ -582,9 +611,9 @@ const AdminDashboard = () => {
 
         {/* Print Selection Modal - Scrollable List */}
         {showPrintModal && (
-          <div className="modal-overlay no-print">
-            <div className="modal-content" style={{ width: "500px", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
-                <h3 style={{ textAlign: "center", borderBottom: "1px solid #eee", paddingBottom: "15px" }}>Print Pet Records Selection</h3>
+          <div className="modal-overlay no-print" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+            <div className="modal-content" style={{background:"white", padding:"25px", borderRadius:"12px", width:"500px", maxHeight:"80vh", display: "flex", flexDirection: "column", boxShadow: "0 10px 30px rgba(0,0,0,0.3)"}}>
+                <h3 style={{ textAlign: "center", borderBottom: "1px solid #eee", paddingBottom: "15px", marginTop: 0 }}>Print Pet Records Selection</h3>
                 <p style={{ fontSize: "14px", color: "#666", marginBottom: "15px" }}>Select the pets you want to include in the printed report:</p>
                 
                 <div style={{ flex: 1, overflowY: "auto", border: "1px solid #eee", borderRadius: "8px", padding: "10px", marginBottom: "20px", background: "#f9f9f9" }}>
@@ -601,8 +630,8 @@ const AdminDashboard = () => {
                 </div>
 
                 <div style={{ display: "flex", gap: "10px" }}>
-                    <button onClick={executePrint} disabled={selectedPetsForPrint.length === 0} className="action-btn" style={{ background: selectedPetsForPrint.length > 0 ? "#4CAF50" : "#white", color: "white", flex: 1 }}>Generate Print View ({selectedPetsForPrint.length})</button>
-                    <button onClick={() => setShowPrintModal(false)} className="action-btn" style={{ background: "#eee", flex: 1 }}>Cancel</button>
+                    <button onClick={executePrint} disabled={selectedPetsForPrint.length === 0} style={{ padding: "10px 20px", background: selectedPetsForPrint.length > 0 ? "#4CAF50" : "#ccc", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", flex: 1 }}>Generate Print View ({selectedPetsForPrint.length})</button>
+                    <button onClick={() => setShowPrintModal(false)} style={{ padding: "10px 20px", background: "#eee", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", flex: 1 }}>Cancel</button>
                 </div>
             </div>
           </div>
@@ -610,7 +639,7 @@ const AdminDashboard = () => {
 
         {/* Global Custom Alert/Confirm Modal */}
         {modal.show && (
-            <div className="modal-overlay no-print" style={{ zIndex: 3000 }}>
+            <div className="modal-overlay no-print" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex: 3000}}>
                 <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "350px", boxShadow: "0 10px 25px rgba(0,0,0,0.2)", textAlign: "center" }}>
                     <h3 style={{ marginTop: 0, color: modal.type === "alert" ? "#2196F3" : "#333" }}>{modal.title}</h3>
                     <p style={{ color: "#666", marginBottom: "25px", lineHeight: "1.5" }}>{modal.message}</p>
@@ -730,19 +759,6 @@ const AdminDashboard = () => {
               th, td { border: 1px solid #333; padding: 8px; text-align: left; }
               th { background-color: #f2f2f2 !important; -webkit-print-color-adjust: exact; }
           }
-
-          .admin-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-          .admin-table th { text-align: left; padding: 12px; background: #f8f9fa; color: #666; font-size: 13px; text-transform: uppercase; border-bottom: 2px solid #eee; }
-          .admin-table td { padding: 12px; border-bottom: 1px solid #eee; font-size: 14px; }
-          .card { background: white; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
-          .navbar { background: white; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; }
-          .logo { display: flex; align-items: center; gap: 10px; font-weight: bold; font-size: 1.2rem; color: #2196F3; }
-          .logo-img { height: 35px; }
-          .action-btn { border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-          .search-input { padding: 10px; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 20px; outline: none; }
-          .search-input:focus { border-color: #2196F3; }
-          .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center; z-index: 2000; }
-          .modal-content { background: white; padding: 30px; border-radius: 12px; width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); }
       `}</style>
     </div>
   );
