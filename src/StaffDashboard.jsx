@@ -5,6 +5,7 @@ import { collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc, getDo
 import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png"; 
 
+
 // --- CONSTANTS FOR SELECTIONS ---
 const VISIT_REASONS = [
     "Routine Check-up", 
@@ -147,7 +148,7 @@ const StaffDashboard = () => {
   const [editingInventoryId, setEditingInventoryId] = useState(null); 
   const [inventoryData, setInventoryData] = useState({
       name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5});
-
+const [inventoryFilter, setInventoryFilter] = useState("All");
   // --- DATA FETCHING ---
   useEffect(() => {
     const unsubAppts = onSnapshot(query(collection(db, "appointments"), orderBy("date", "desc")), (snap) => 
@@ -1124,6 +1125,12 @@ const confirmQuickUsage = async () => {
                                         <div key={msg.id} style={{ alignSelf: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start", maxWidth: "70%", display: "flex", flexDirection: "column", alignItems: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start" }}>
                                             <div style={{ background: msg.senderId === auth.currentUser.uid ? "#2196F3" : "#eee", color: msg.senderId === auth.currentUser.uid ? "white" : "#333", padding: "10px 15px", borderRadius: "15px", fontSize: "14px" }}>
                                                 {msg.text}
+                                                <div style={{ fontSize: "10px", marginTop: "5px", textAlign: "right", opacity: 0.7 }}>
+                                                {msg.createdAt?.toDate 
+                                                    ? (msg.createdAt.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt)).toLocaleString([], {year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'})
+                                                    : "Just now"
+                                                }
+                                                </div>
                                             </div>
                                             {msg.senderId === auth.currentUser.uid && (
                                                 <button onClick={() => handleStartEdit(msg)} style={{fontSize:"10px", border:"none", background:"none", color:"#999", cursor:"pointer", marginTop:"2px"}}>Edit</button>
@@ -1146,51 +1153,88 @@ const confirmQuickUsage = async () => {
             )}
 
             {/* --- INVENTORY TAB --- */}
+            {/* --- INVENTORY TAB --- */}
             {activeTab === "inventory" && (
-                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px"}}>
                         <h3>Inventory Management</h3>
                         <div style={{display:"flex", gap:"10px"}}>
-                            <button onClick={printInventoryReport} style={{ background: "#607D8B", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", display:"flex", alignItems:"center", gap:"5px" }}>🖨️ Print List</button>
-                            <button onClick={handleOpenAddInventory} style={{ background: "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>+ Add Item</button>
+                            <button onClick={printInventoryReport} style={{background:"#607D8B", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>🖨️ Print Report</button>
+                            <button onClick={handleOpenAddInventory} style={{background:"#4CAF50", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>+ Add Item</button>
                         </div>
                     </div>
-                    <input type="text" placeholder="Search item..." value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} style={{ padding: "10px", width: "100%", marginBottom: "15px", border: "1px solid #ddd", borderRadius: "6px" }} />
+
+                    {/* --- NEW SUB-TABS --- */}
+                    <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+                        <button 
+                            onClick={() => setInventoryFilter("All")} 
+                            style={{
+                                padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
+                                background: inventoryFilter === "All" ? "#2196F3" : "#e0e0e0",
+                                color: inventoryFilter === "All" ? "white" : "#333"
+                            }}
+                        >
+                            All Items
+                        </button>
+                        <button 
+                            onClick={() => setInventoryFilter("LowStock")} 
+                            style={{
+                                padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
+                                background: inventoryFilter === "LowStock" ? "#ff9800" : "#e0e0e0",
+                                color: inventoryFilter === "LowStock" ? "white" : "#333"
+                            }}
+                        >
+                            ⚠️ Low Stock
+                        </button>
+                    </div>
+
+                    <input type="text" placeholder="Search Inventory..." value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", width:"100%", boxSizing:"border-box"}}/>
                     
-                    <div style={{ flex: 1, overflowY: "auto" }}>
-                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                            <thead style={{ position: "sticky", top: 0, background: "white", boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
-                                <tr style={{ textAlign: "left", color: "#666" }}>
-                                    <th style={{ padding: "15px" }}>Item Name</th>
-                                    <th>Category</th>
-                                    <th>Stock</th>
-                                    <th>Unit</th>
-                                    <th>Status</th>
-                                    <th>Actions</th>
+                    <div style={{flex:1, overflowY:"auto"}}>
+                        <table style={{width:"100%", borderCollapse:"collapse", fontSize:"14px"}}>
+                            <thead style={{background:"#f1f1f1", position:"sticky", top:0}}>
+                                <tr>
+                                    <th style={{padding:"10px", textAlign:"left"}}>Item Name</th>
+                                    <th style={{padding:"10px", textAlign:"left"}}>Category</th>
+                                    <th style={{padding:"10px", textAlign:"left"}}>Stock</th>
+                                    <th style={{padding:"10px", textAlign:"left"}}>Expiry</th>
+                                    <th style={{padding:"10px", textAlign:"left"}}>Status</th>
+                                    <th style={{padding:"10px", textAlign:"center"}}>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {inventory.filter(i => i.name.toLowerCase().includes(inventorySearch.toLowerCase())).map(item => {
+                                {inventory
+                                    .filter(i => {
+                                        // Filter Logic: Check Search AND Check Tab Selection
+                                        const matchesSearch = i.name.toLowerCase().includes(inventorySearch.toLowerCase());
+                                        const matchesTab = inventoryFilter === "All" || i.quantity <= (i.threshold || 5);
+                                        return matchesSearch && matchesTab;
+                                    })
+                                    .map(item => {
                                     const status = getStockStatus(item);
                                     return (
-                                        <tr key={item.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                            <td style={{ padding: "15px", fontWeight: "bold" }}>{item.name}</td>
-                                            <td>{item.category}</td>
-                                            <td>{item.quantity}</td>
-                                            <td>{item.unit}</td>
-                                            <td><span style={{ background: status.color, color: "white", padding: "4px 10px", borderRadius: "12px", fontSize: "12px" }}>{status.label}</span></td>
-                                            <td>
-                                                <button onClick={() => handleQuickUsage(item)} style={{marginRight:"8px", background:"#FF9800", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"12px"}}>Use</button>
-                                                <button onClick={() => handleOpenEditInventory(item)} style={{ marginRight: "10px", background: "none", border: "1px solid #2196F3", color: "#2196F3", padding: "5px 10px", borderRadius: "4px", cursor: "pointer" }}>Edit</button>
-                                                <button onClick={() => handleDeleteInventory(item.id)} style={{ background: "none", border: "1px solid #f44336", color: "#f44336", padding: "5px 10px", borderRadius: "4px", cursor: "pointer" }}>Delete</button>
+                                        <tr key={item.id} style={{borderBottom:"1px solid #eee"}}>
+                                            <td style={{padding:"10px"}}>{item.name}</td>
+                                            <td style={{padding:"10px"}}>{item.category}</td>
+                                            <td style={{padding:"10px", fontWeight:"bold"}}>{item.quantity} {item.unit}</td>
+                                            <td style={{padding:"10px", color: status.label === 'Expired' ? 'red' : 'inherit'}}>{item.expiryDate || "-"}</td>
+                                            <td style={{padding:"10px"}}><span style={{background:status.color, color:"white", padding:"3px 8px", borderRadius:"12px", fontSize:"11px"}}>{status.label}</span></td>
+                                            <td style={{padding:"10px", textAlign:"center"}}>
+                                                <button onClick={() => handleQuickUsage(item)} style={{background:"#FF9800", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", marginRight:"5px", cursor:"pointer", fontSize:"11px"}}>-</button>
+                                                <button onClick={() => handleOpenEditInventory(item)} style={{background:"#2196F3", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", marginRight:"5px", cursor:"pointer", fontSize:"11px"}}>Edit</button>
+                                                <button onClick={() => handleDeleteInventory(item.id)} style={{background:"#f44336", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"11px"}}>Delete</button>
                                             </td>
                                         </tr>
                                     );
                                 })}
                             </tbody>
                         </table>
+                        {/* Optional: Message when list is empty */}
+                        {inventory.filter(i => (inventoryFilter === "All" || i.quantity <= (i.threshold || 5)) && i.name.toLowerCase().includes(inventorySearch.toLowerCase())).length === 0 && (
+                            <div style={{textAlign:"center", color:"#999", padding:"20px"}}>No items found.</div>
+                        )}
                     </div>
-                </div>
+                 </div>
             )}
 
             {/* --- REPORTS TAB --- */}

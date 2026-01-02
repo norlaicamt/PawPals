@@ -54,6 +54,10 @@ const OwnerDashboard = () => {
   // --- MOBILE SUB-TAB STATES ---
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [apptSubTab, setApptSubTab] = useState("request"); 
+  
+  // --- PET SUB-TAB STATE (For Medical Records) ---
+  const [petSubTab, setPetSubTab] = useState("list"); // 'list' or 'records'
+  const [recordFilterPetId, setRecordFilterPetId] = useState("all"); // Filter for records
 
   // Toast State
   const [toast, setToast] = useState({ show: false, message: "", type: "success" });
@@ -66,9 +70,14 @@ const OwnerDashboard = () => {
   // Data States
   const [myPets, setMyPets] = useState([]);
   const [myAppointments, setMyAppointments] = useState([]);
-  const [notifications, setNotifications] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
+  
+  // --- NOTIFICATION STATES ---
+  const [serverNotifications, setServerNotifications] = useState([]);
+  const [localReminders, setLocalReminders] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
+  
+  // --- NEW: TRACK ALERTS TO PREVENT SPAM ---
+  const [notifiedAppts, setNotifiedAppts] = useState(new Set());
   
   // UI States
   const [chatInput, setChatInput] = useState("");
@@ -97,10 +106,6 @@ const OwnerDashboard = () => {
   // --- MEDICAL RECORD MODAL STATES ---
   const [showMedicalModal, setShowMedicalModal] = useState(false); 
   const [selectedRecord, setSelectedRecord] = useState(null);
-
-  // --- PET HISTORY MODAL STATES ---
-  const [showHistoryModal, setShowHistoryModal] = useState(false); 
-  const [historyPet, setHistoryPet] = useState(null);
 
   // --- RESCHEDULE STATE ---
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
@@ -132,6 +137,47 @@ const OwnerDashboard = () => {
   const [apptDate, setApptDate] = useState("");
   const [apptTime, setApptTime] = useState("08:00");
 
+  // --- COMBINE NOTIFICATIONS ---
+  const allNotifications = [...localReminders, ...serverNotifications];
+  const unreadCount = allNotifications.filter(n => !n.isSeenByOwner).length;
+
+  // --- CHECK FOR UPCOMING APPOINTMENTS (1 HOUR REMINDER) ---
+  useEffect(() => {
+      const checkUpcoming = () => {
+          if (!myAppointments.length) return;
+
+          const now = new Date();
+
+          myAppointments.forEach(appt => {
+              if (appt.status === "Approved" && !notifiedAppts.has(appt.id)) {
+                  
+                  const apptDateTime = new Date(`${appt.date}T${appt.time}`);
+                  const diffMs = apptDateTime - now;
+                  const diffMins = Math.floor(diffMs / 60000);
+
+                  if (diffMins > 0 && diffMins <= 60) {
+                      showToast(`🔔 Reminder: Appointment for ${appt.petName} is in ${diffMins} minutes!`, "success");
+                      
+                      const newAlert = {
+                          id: `reminder-${appt.id}`,
+                          type: "alert",
+                          text: `⏰ UPCOMING: Your appointment for ${appt.petName} is in ${diffMins} minutes.`,
+                          isSeenByOwner: false,
+                          status: "Approved"
+                      };
+
+                      setLocalReminders(prev => [newAlert, ...prev]);
+                      setNotifiedAppts(prev => new Set(prev).add(appt.id));
+                  }
+              }
+          });
+      };
+
+      checkUpcoming();
+      const interval = setInterval(checkUpcoming, 60000); 
+      return () => clearInterval(interval);
+  }, [myAppointments, notifiedAppts]);
+
   // --- LISTENER TO DETECT MOBILE SCREEN ---
   useEffect(() => {
       const handleResize = () => setIsMobile(window.innerWidth <= 768);
@@ -154,7 +200,8 @@ const OwnerDashboard = () => {
       const unsubPets = onSnapshot(qPets, (snap) => {
         const petsData = snap.docs
             .map(doc => ({ ...doc.data(), id: doc.id }))
-            .filter(pet => !pet.isArchived);
+            .filter(pet => !pet.isArchived)
+            .sort((a, b) => a.name.localeCompare(b.name)); // --- NEW: SORT ALPHABETICALLY A-Z ---
 
         setMyPets(petsData);
         if (petsData.length > 0 && !selectedPetId) setSelectedPetId(petsData[0].id);
@@ -170,11 +217,10 @@ const OwnerDashboard = () => {
         });
         setMyAppointments(appts);
         
-        // --- UPDATED NOTIFICATION LOGIC ---
         const alerts = appts.filter(a => a.status !== "Pending").map(a => {
             let text = `Your appointment for ${a.petName} on ${a.date} is ${a.status}.`;
             if (a.status === "Cancelled" && a.cancellationReason) {
-                text += ` Reason: ${a.cancellationReason}`; // Append reason to notification
+                text += ` Reason: ${a.cancellationReason}`;
             }
             return {
                 id: a.id, 
@@ -184,9 +230,7 @@ const OwnerDashboard = () => {
                 status: a.status
             };
         });
-        
-        setNotifications(alerts);
-        setUnreadCount(alerts.filter(a => !a.isSeenByOwner).length);
+        setServerNotifications(alerts);
       });
 
       const qChat = query(collection(db, "messages"), orderBy("createdAt", "asc"));
@@ -225,12 +269,20 @@ const OwnerDashboard = () => {
       return appt.status === apptFilter;
   });
 
+  // --- FILTER MEDICAL RECORDS ---
+  const medicalRecords = myAppointments.filter(appt => {
+      const isDone = appt.status === 'Done';
+      const isPetMatch = recordFilterPetId === 'all' || appt.petId === recordFilterPetId;
+      return isDone && isPetMatch;
+  });
+
   const handleToggleNotifications = () => {
       setShowNotifDropdown(!showNotifDropdown);
-      if (!showNotifDropdown && unreadCount > 0) {
-          notifications.filter(n => !n.isSeenByOwner).forEach(async (item) => {
+      if (!showNotifDropdown) {
+          serverNotifications.filter(n => !n.isSeenByOwner).forEach(async (item) => {
               await updateDoc(doc(db, "appointments", item.id), { isSeenByOwner: true });
           });
+          setLocalReminders(prev => prev.map(n => ({...n, isSeenByOwner: true})));
       }
   };
 
@@ -304,9 +356,9 @@ const OwnerDashboard = () => {
       setShowMedicalModal(true);
   };
 
-  const handleViewHistory = (pet) => {
-      setHistoryPet(pet);
-      setShowHistoryModal(true);
+  const handleViewPetHistory = (petId) => {
+      setRecordFilterPetId(petId);
+      setPetSubTab("records");
   };
   
   const handlePrintRecord = (record) => {
@@ -354,7 +406,6 @@ const OwnerDashboard = () => {
       setShowRescheduleModal(true);
   };
 
-  // --- UPDATED RESCHEDULE LOGIC (TIME RANGE) ---
   const handleRescheduleSubmit = async (e) => {
       e.preventDefault();
       if (isSaving) return; 
@@ -369,15 +420,12 @@ const OwnerDashboard = () => {
         if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
         if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-        // 1. Prepare new time range
         const newStart = getTimeInMinutes(rescheduleData.time);
-        const newEnd = newStart + 60; // 60 mins duration
+        const newEnd = newStart + 60; 
 
-        // 2. Query ALL appointments for this DATE
         const qConflict = query(collection(db, "appointments"), where("date", "==", rescheduleData.date));
         const snapshot = await getDocs(qConflict);
 
-        // 3. Check Overlaps
         const hasConflict = snapshot.docs.some(doc => {
             if (doc.id === rescheduleData.id) return false; 
             const data = doc.data();
@@ -385,8 +433,6 @@ const OwnerDashboard = () => {
 
             const existingStart = getTimeInMinutes(data.time);
             const existingEnd = existingStart + 60;
-
-            // Overlap: (StartA < EndB) && (EndA > StartB)
             return (newStart < existingEnd && newEnd > existingStart);
         });
 
@@ -510,7 +556,6 @@ const OwnerDashboard = () => {
     }
   };
   
-  // --- UPDATED BOOKING LOGIC (TIME RANGE) ---
   const handleBookAppointment = async (e) => {
       e.preventDefault();
       if (!selectedPetId) return showToast("Please add a pet first!", "error");
@@ -528,23 +573,18 @@ const OwnerDashboard = () => {
         if (selectedDateTime.getDay() === 6) throw new Error("Sorry, the clinic is closed on Saturdays.");
         if (selectedDateTime < now) throw new Error("Please select a future date and time.");
 
-        // 1. Prepare new time range
         const newStart = getTimeInMinutes(apptTime);
-        const newEnd = newStart + 60; // 60 mins duration
+        const newEnd = newStart + 60; 
 
-        // 2. Query ALL appointments for this DATE
         const qConflict = query(collection(db, "appointments"), where("date", "==", apptDate));
         const snapshot = await getDocs(qConflict);
 
-        // 3. Check Overlaps
         const hasConflict = snapshot.docs.some(doc => {
             const data = doc.data();
             if (data.status === "Cancelled" || data.status === "Rejected") return false;
 
             const existingStart = getTimeInMinutes(data.time);
             const existingEnd = existingStart + 60;
-
-            // Overlap: (StartA < EndB) && (EndA > StartB)
             return (newStart < existingEnd && newEnd > existingStart);
         });
 
@@ -588,9 +628,42 @@ const OwnerDashboard = () => {
           return;
       }
 
+      // --- CHECK FOR AUTO-REPLY CONDITION (Before sending the new message) ---
+      let shouldAutoReply = false;
+      const now = new Date();
+      
+      if (chatMessages.length === 0) {
+          shouldAutoReply = true;
+      } else {
+          // Check if last message from ANYONE was > 2 hours ago
+          const lastMsg = chatMessages[chatMessages.length - 1];
+          const lastTime = lastMsg.createdAt?.toDate ? lastMsg.createdAt.toDate() : new Date(lastMsg.createdAt);
+          const diffMs = now - lastTime;
+          const twoHoursMs = 2 * 60 * 60 * 1000;
+          
+          if (diffMs >= twoHoursMs) {
+              shouldAutoReply = true;
+          }
+      }
+
       await addDoc(collection(db, "messages"), { 
-          text: chatInput, senderId: user.uid, senderName: "Owner", receiverId: "STAFF_global", createdAt: new Date(), participants: [user.uid], type: "chat", read: false 
+          text: chatInput, senderId: user.uid, senderName: "Owner", receiverId: "STAFF_global", createdAt: now, participants: [user.uid], type: "chat", read: false 
       }); 
+      
+      if (shouldAutoReply) {
+          setTimeout(async () => {
+              await addDoc(collection(db, "messages"), {
+                  text: "Thank you for contacting us! Our staff has been notified and will reply shortly.",
+                  senderId: "STAFF_global",
+                  senderName: "System",
+                  receiverId: user.uid,
+                  createdAt: new Date(),
+                  participants: [user.uid],
+                  type: "chat",
+                  read: false
+              });
+          }, 1000);
+      }
 
       setChatInput(""); 
   };
@@ -645,7 +718,7 @@ const OwnerDashboard = () => {
                     <div style={{ position: "absolute", top: "50px", right: "0", width: "300px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
                         <h4 style={{ margin: "0 0 10px 0", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>Notifications</h4>
                         <div style={{ maxHeight: "300px", overflowY: "auto" }}>
-                            {notifications.length === 0 ? <p style={{color:"#888"}}>No updates.</p> : notifications.map(n => (
+                            {allNotifications.length === 0 ? <p style={{color:"#888"}}>No updates.</p> : allNotifications.map(n => (
                                 <div key={n.id} onClick={() => handleNotificationClick(n)} style={{ padding:"10px", borderBottom:"1px solid #f0f0f0", fontSize:"14px", background: n.isSeenByOwner ? "white" : "#e3f2fd", cursor: "pointer", transition: "background 0.2s" }} onMouseOver={(e) => e.currentTarget.style.background = "#f5f5f5"} onMouseOut={(e) => e.currentTarget.style.background = n.isSeenByOwner ? "white" : "#e3f2fd"} >
                                     {n.text}
                                 </div>
@@ -712,52 +785,98 @@ const OwnerDashboard = () => {
                 </div>
             )}
 
-            {/* --- PETS TAB --- */}
+            {/* --- PETS TAB & MEDICAL RECORDS SUB-TAB --- */}
             {activeTab === "pets" && (
                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px", borderBottom:"1px solid #eee", paddingBottom:"15px", flexShrink: 0}}>
-                        <h3 style={{margin:0, color: "#333"}}>My Pets</h3>
-                        <button onClick={openAddPetModal} style={{background:"#4CAF50", color:"white", border:"none", borderRadius:"8px", padding:"10px 20px", cursor:"pointer", fontWeight: "bold", display:"flex", alignItems:"center", gap:"5px"}}>+ Add Pet</button>
+                    
+                    {/* --- NEW: SUB-TAB NAVIGATION --- */}
+                    <div style={{display: "flex", gap: "10px", marginBottom: "20px", borderBottom: "1px solid #eee", paddingBottom: "10px"}}>
+                        <button onClick={() => setPetSubTab("list")} style={{background: petSubTab === "list" ? "#2196F3" : "none", color: petSubTab === "list" ? "white" : "#666", padding: "10px 20px", borderRadius: "20px", border: petSubTab === "list" ? "none" : "1px solid #ddd", cursor: "pointer", fontWeight: "bold"}}>🐾 My Pets</button>
+                        <button onClick={() => setPetSubTab("records")} style={{background: petSubTab === "records" ? "#2196F3" : "none", color: petSubTab === "records" ? "white" : "#666", padding: "10px 20px", borderRadius: "20px", border: petSubTab === "records" ? "none" : "1px solid #ddd", cursor: "pointer", fontWeight: "bold"}}>💉 Medical Records</button>
                     </div>
-                    <input type="text" placeholder="🔍 Search your pets..." value={petSearch} onChange={(e) => setPetSearch(e.target.value)} style={{ marginBottom: "20px", borderRadius: "8px", padding: "12px", border: "1px solid #ddd", width: "100%", boxSizing:"border-box" }} />
-                    <div style={{ flex: 1, overflowY: "auto" }}>
-                        {filteredPets.length === 0 ? <p style={{color:"#888", textAlign:"center", padding:"30px"}}>No pets found.</p> : (
-                            <table style={{width: "100%", borderCollapse: "collapse"}}>
-                                <thead>
-                                    <tr style={{textAlign: "left", borderBottom: "2px solid #eee", color: "#666"}}>
-                                        <th style={{padding: "12px"}}>Name</th>
-                                        <th style={{padding: "12px"}}>Info</th>
-                                        <th style={{padding: "12px"}}>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredPets.map(pet => (
-                                        <tr key={pet.id} style={{borderBottom: "1px solid #f9f9f9", background: pet.deletionStatus === 'Pending' ? '#ffebee' : 'transparent'}}>
-                                            <td style={{padding: "15px", fontWeight: "bold", fontSize: "16px"}}>
-                                                <span style={{marginRight:"10px", fontSize:"20px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span>
-                                                {pet.name}
-                                            </td>
-                                            <td style={{padding: "15px", color: "#555"}}>
-                                                <div>{pet.species} - {pet.breed}</div>
-                                                <div style={{fontSize: "12px"}}>{pet.age} {pet.ageUnit} ({pet.gender})</div>
-                                            </td>
-                                            <td style={{padding: "15px"}}>
-                                                {pet.deletionStatus === 'Pending' ? (
-                                                     <span style={{color: "red", fontWeight: "bold", fontSize: "12px", padding: "4px 8px", background: "#ffebee", borderRadius: "4px"}}>Deletion Pending</span>
-                                                ) : (
-                                                    <div style={{display: "flex", gap: "8px"}}>
-                                                        <button onClick={() => handleViewHistory(pet)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: "bold"}}>History</button>
-                                                        <button onClick={() => openEditPetModal(pet)} style={{padding: "6px 12px", background: "none", color: "#666", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Edit</button>
-                                                        <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Delete</button>
-                                                    </div>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        )}
-                    </div>
+
+                    {/* VIEW 1: PET LIST */}
+                    {petSubTab === "list" && (
+                        <>
+                            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px"}}>
+                                <input type="text" placeholder="🔍 Search your pets..." value={petSearch} onChange={(e) => setPetSearch(e.target.value)} style={{ borderRadius: "8px", padding: "12px", border: "1px solid #ddd", width: "60%" }} />
+                                <button onClick={openAddPetModal} style={{background:"#4CAF50", color:"white", border:"none", borderRadius:"8px", padding:"10px 20px", cursor:"pointer", fontWeight: "bold", display:"flex", alignItems:"center", gap:"5px"}}>+ Add Pet</button>
+                            </div>
+                            <div style={{ flex: 1, overflowY: "auto" }}>
+                                {filteredPets.length === 0 ? <p style={{color:"#888", textAlign:"center", padding:"30px"}}>No pets found.</p> : (
+                                    <table style={{width: "100%", borderCollapse: "collapse"}}>
+                                        <thead>
+                                            <tr style={{textAlign: "left", borderBottom: "2px solid #eee", color: "#666"}}>
+                                                <th style={{padding: "12px"}}>Name</th>
+                                                <th style={{padding: "12px"}}>Info</th>
+                                                <th style={{padding: "12px"}}>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredPets.map(pet => (
+                                                <tr key={pet.id} style={{borderBottom: "1px solid #f9f9f9", background: pet.deletionStatus === 'Pending' ? '#ffebee' : 'transparent'}}>
+                                                    <td style={{padding: "15px", fontWeight: "bold", fontSize: "16px"}}>
+                                                        <span style={{marginRight:"10px", fontSize:"20px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span>
+                                                        {pet.name}
+                                                    </td>
+                                                    <td style={{padding: "15px", color: "#555"}}>
+                                                        <div>{pet.species} - {pet.breed}</div>
+                                                        <div style={{fontSize: "12px"}}>{pet.age} {pet.ageUnit} ({pet.gender})</div>
+                                                    </td>
+                                                    <td style={{padding: "15px"}}>
+                                                        {pet.deletionStatus === 'Pending' ? (
+                                                             <span style={{color: "red", fontWeight: "bold", fontSize: "12px", padding: "4px 8px", background: "#ffebee", borderRadius: "4px"}}>Deletion Pending</span>
+                                                        ) : (
+                                                            <div style={{display: "flex", gap: "8px"}}>
+                                                                <button onClick={() => handleViewPetHistory(pet.id)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: "bold"}}>View Records</button>
+                                                                <button onClick={() => openEditPetModal(pet)} style={{padding: "6px 12px", background: "none", color: "#666", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Edit</button>
+                                                                <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Delete</button>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        </>
+                    )}
+
+                    {/* VIEW 2: MEDICAL RECORDS */}
+                    {petSubTab === "records" && (
+                        <div style={{flex: 1, display: "flex", flexDirection: "column", overflow: "hidden"}}>
+                            <div style={{marginBottom: "20px", display: "flex", gap: "15px", alignItems: "center"}}>
+                                <label style={{fontWeight: "bold", color: "#555"}}>Filter by Pet:</label>
+                                <select value={recordFilterPetId} onChange={(e) => setRecordFilterPetId(e.target.value)} style={{padding: "10px", borderRadius: "6px", border: "1px solid #ddd", minWidth: "200px"}}>
+                                    <option value="all">All Pets</option>
+                                    {myPets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                </select>
+                            </div>
+
+                            <div style={{flex: 1, overflowY: "auto", border: "1px solid #eee", borderRadius: "8px", background: "#fdfdfd"}}>
+                                {medicalRecords.length === 0 ? (
+                                    <div style={{textAlign: "center", padding: "40px", color: "#999"}}>
+                                        <div style={{fontSize: "40px", marginBottom: "10px"}}>📂</div>
+                                        <p>No medical records found.</p>
+                                        <small>Only completed appointments appear here.</small>
+                                    </div>
+                                ) : (
+                                    medicalRecords.map(record => (
+                                        <div key={record.id} style={{display: "flex", justifyContent: "space-between", alignItems: "center", padding: "15px", borderBottom: "1px solid #eee", background: "white"}}>
+                                            <div>
+                                                <div style={{fontWeight: "bold", fontSize: "15px", color: "#2196F3"}}>{record.date}</div>
+                                                <div style={{fontSize: "14px", fontWeight: "bold", marginTop: "2px"}}>{record.petName}</div>
+                                                <div style={{fontSize: "13px", color: "#666", marginTop: "4px"}}>Diagnosis: {record.diagnosis || "N/A"}</div>
+                                            </div>
+                                            <button onClick={() => handleViewMedicalRecord(record)} style={{padding: "8px 15px", background: "#e3f2fd", color: "#1976D2", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold", fontSize: "13px"}}>View Details</button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                 </div>
             )}
 
@@ -779,7 +898,6 @@ const OwnerDashboard = () => {
                             <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", padding: "20px", boxSizing: "border-box" }}>
                                 <h3 style={{marginTop:0, color: "#2196F3", borderBottom: "1px solid #eee", paddingBottom: "10px"}}>Request Appointment</h3>
                                 
-                                {/* --- ADDED NOTE --- */}
                                 <div style={{background: "#e3f2fd", padding: "10px", borderRadius: "8px", fontSize: "13px", color: "#0d47a1", marginBottom: "15px", borderLeft: "4px solid #2196F3"}}>
                                     <strong>ℹ️ Note:</strong> The clinic is closed on <strong>Saturdays</strong>. Consultations typically last <strong>30 mins - 1 hr</strong>.
                                 </div>
@@ -828,7 +946,6 @@ const OwnerDashboard = () => {
                                                         <div style={{fontSize: "13px", color: "#888"}}>{appt.reason}</div>
                                                         <span style={{fontSize: "11px", background: getStatusColor(appt.status), color: "white", padding: "2px 8px", borderRadius: "4px", marginTop: "5px", display: "inline-block"}}>{appt.status}</span>
                                                         
-                                                        {/* --- SHOW REASON FOR CANCELLATION --- */}
                                                         {appt.status === "Cancelled" && appt.cancellationReason && (
                                                             <div style={{fontSize:"12px", color: "#d32f2f", marginTop: "5px", background: "#ffebee", padding: "5px", borderRadius: "4px"}}>
                                                                 <strong>Reason:</strong> {appt.cancellationReason}
@@ -883,7 +1000,9 @@ const OwnerDashboard = () => {
                                     {msg.text}
                                 </div>
                                 <div style={{fontSize: "10px", color: "#999", marginTop: "3px", marginRight: "5px"}}>
-                                    {msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ""}
+                                    {msg.createdAt 
+                                    ? (msg.createdAt.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt)).toLocaleString([], {year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'})
+                                    : "Just now"}
                                     {msg.senderId === user.uid && <span onClick={() => handleStartEdit(msg)} style={{marginLeft: "10px", cursor: "pointer", color: "#2196F3"}}>Edit</span>}
                                 </div>
                             </div>
@@ -920,7 +1039,6 @@ const OwnerDashboard = () => {
                       </div>
                       {species === "Other" && <input type="text" placeholder="Specify Species" value={otherSpecies} onChange={(e) => setOtherSpecies(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}} />}
                       
-                      {/* Breed Logic */}
                       {["Dog", "Cat"].includes(species) ? (
                           <select value={breed} onChange={(e) => setBreed(e.target.value)} style={{padding: "12px", borderRadius: "6px", border: "1px solid #ddd"}}>
                               <option value="">Select Breed</option>
@@ -998,7 +1116,7 @@ const OwnerDashboard = () => {
           </div>
       )}
 
-      {/* 5. Medical Record Modal */}
+      {/* 5. Medical Record Modal (VIEW ONLY) */}
       {showMedicalModal && selectedRecord && (
           <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
               <div style={{background:"white", padding:"30px", borderRadius:"12px", width:"500px", maxWidth:"90%", maxHeight:"80vh", overflowY:"auto"}}>
@@ -1022,25 +1140,6 @@ const OwnerDashboard = () => {
                       <button onClick={() => handlePrintRecord(selectedRecord)} style={{flex:1, background:"#607D8B", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>🖨 Print</button>
                       <button onClick={() => setShowMedicalModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Close</button>
                   </div>
-              </div>
-          </div>
-      )}
-
-      {/* 6. History Modal */}
-      {showHistoryModal && historyPet && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"500px", maxHeight:"80vh", overflowY:"auto"}}>
-                  <h3 style={{marginTop:0}}>History: {historyPet.name}</h3>
-                  {myAppointments.filter(a => a.petId === historyPet.id && a.status === 'Done').length === 0 ? <p>No completed visits yet.</p> : (
-                      myAppointments.filter(a => a.petId === historyPet.id && a.status === 'Done').map(record => (
-                          <div key={record.id} style={{borderBottom:"1px solid #eee", padding:"10px 0"}}>
-                              <div style={{fontWeight:"bold", color: "#2196F3"}}>{record.date}</div>
-                              <div style={{fontSize:"14px"}}>Diagnosis: {record.diagnosis}</div>
-                              <button onClick={() => { setShowHistoryModal(false); handleViewMedicalRecord(record); }} style={{fontSize:"12px", color:"#2196F3", background:"none", border:"none", padding:0, cursor:"pointer", marginTop:"5px", textDecoration:"underline"}}>View Details</button>
-                          </div>
-                      ))
-                  )}
-                  <button onClick={() => setShowHistoryModal(false)} style={{marginTop:"15px", width:"100%", padding:"10px", background:"#eee", border:"none", borderRadius:"6px", cursor:"pointer"}}>Close</button>
               </div>
           </div>
       )}
