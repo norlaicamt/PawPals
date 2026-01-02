@@ -126,6 +126,8 @@ const StaffDashboard = () => {
       onConfirm: () => {} 
   });
 
+  const [isSavingInventory, setIsSavingInventory] = useState(false); // Add this
+
   // --- DECLINE REASON MODAL STATE ---
   const [declineModal, setDeclineModal] = useState({ 
       show: false, 
@@ -180,14 +182,6 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
   }, []);
 
   // --- DERIVED STATE ---
-  
-  const lowStockItems = useMemo(() => inventory.filter(i => i.quantity <= (i.threshold || 5)), [inventory]);
-  
-  const expiredItems = useMemo(() => {
-      const today = new Date();
-      today.setHours(0,0,0,0);
-      return inventory.filter(i => i.expiryDate && new Date(i.expiryDate) < today);
-  }, [inventory]);
 
   const chatMessages = useMemo(() => {
     if (!selectedChatOwner) return [];
@@ -218,7 +212,7 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
     }).sort((a, b) => a.name.localeCompare(b.name));
   }, [allPets, owners, petSearch, petFilterType]);
 
-  const { generatedStats, serviceBreakdown } = useMemo(() => {
+  const { generatedStats: _generatedStats, serviceBreakdown: _serviceBreakdown } = useMemo(() => {
     const emptyStats = {
         itemsAdded: 0, itemsUsed: 0, totalAppointments: 0,
         completedAppointments: 0, cancelledAppointments: 0,
@@ -280,6 +274,67 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
     };
   }, [reportStartDate, reportEndDate, inventoryLogs, appointments]);
 
+// --- NEW INVENTORY STATS (Updated with Expiry) ---
+  const inventoryStats = useMemo(() => {
+      // 1. Total Items
+      const totalItems = inventory.length;
+
+      // 2. Items per Category
+      const categoryCounts = {};
+      INVENTORY_CATEGORIES.forEach(cat => categoryCounts[cat] = 0); 
+      inventory.forEach(item => {
+          const cat = item.category || "Uncategorized";
+          categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+      });
+
+      // 3. Recently Added Logs (The "+5 boxes" logic)
+      const recentActivity = inventoryLogs
+          .filter(log => log.change > 0)
+          .slice(0, 5)
+          .map(log => {
+              const item = inventory.find(i => i.id === log.itemId);
+              return { id: log.id, name: log.itemName, added: log.change, unit: item ? item.unit : "units" };
+          });
+
+      // 4. Expiring Soon (Next 60 days or already expired)
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const warningDate = new Date();
+      warningDate.setDate(today.getDate() + 60); // Adjust days as needed
+      
+      const expiringItems = inventory.filter(item => {
+          if (!item.expiryDate) return false; // Skip if no date
+          const exp = new Date(item.expiryDate);
+          return exp <= warningDate;
+      })
+      .sort((a,b) => new Date(a.expiryDate) - new Date(b.expiryDate)) // Oldest/Soonest first
+      .slice(0, 5);
+
+      return { totalItems, categoryCounts, recentActivity, expiringItems };
+  }, [inventory, inventoryLogs]);
+
+  const appointmentStats = useMemo(() => {
+      // 1. Total Appointments
+      const totalAppts = appointments.length;
+
+      // 2. Breakdown by Reason
+      const reasonCounts = {};
+      VISIT_REASONS.forEach(r => reasonCounts[r] = 0); // Initialize known reasons
+      appointments.forEach(app => {
+          const r = app.reason || "Other";
+          reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+      });
+
+      // 3. Upcoming Appointments (Next 5)
+      const today = new Date().toISOString().split('T')[0];
+      const upcoming = appointments
+          .filter(app => app.date >= today && app.status !== "Cancelled" && app.status !== "Declined")
+          .sort((a, b) => a.date.localeCompare(b.date)) // Sort soonest first
+          .slice(0, 5);
+
+      return { totalAppts, reasonCounts, upcoming };
+  }, [appointments]);
+
   // --- AUTO-MARK AS READ LOGIC ---
   useEffect(() => {
     if (activeTab === "messages" && selectedChatOwner) {
@@ -324,19 +379,153 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
       return { label: "In Stock", color: "#4CAF50" };
   };
 
-  // --- PRINT REPORTS ---
-  const printInventoryReport = () => {
+// --- PRINT SUMMARY REPORT (Fully Updated) ---
+  const printSummaryReport = () => {
       const printWindow = window.open('', '_blank');
+      
+      // 1. Calculate Inventory Stats
+      const totalItems = inventory.length;
+      const lowStockCount = inventory.filter(i => i.quantity <= i.threshold).length;
+      
+      // Expiring Soon (Next 60 days)
+      const today = new Date(); 
+      const warningDate = new Date(); warningDate.setDate(today.getDate() + 60);
+      
+      const expiringItems = inventory.filter(item => {
+          if (!item.expiryDate) return false;
+          const exp = new Date(item.expiryDate);
+          return exp <= warningDate;
+      }).sort((a,b) => new Date(a.expiryDate) - new Date(b.expiryDate)).slice(0, 5);
+
+      // Recently Added Stock (Using Logs for "+5" logic)
+      const recentStockLogs = inventoryLogs
+          .filter(log => log.change > 0)
+          .sort((a,b) => b.timestamp - a.timestamp)
+          .slice(0, 5)
+          .map(log => {
+              const item = inventory.find(i => i.id === log.itemId);
+              return { ...log, unit: item ? item.unit : "units" };
+          });
+
+      // 2. Calculate Appointment Stats
+      const totalAppts = appointments.length;
+      const reasonCounts = {};
+      VISIT_REASONS.forEach(r => reasonCounts[r] = 0);
+      appointments.forEach(app => {
+          const r = app.reason || "Other";
+          reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+      });
+
+      const upcomingAppts = appointments
+          .filter(app => app.date >= today.toISOString().split('T')[0] && app.status !== "Cancelled")
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .slice(0, 5);
+
       printWindow.document.write(`
           <html>
-              <head><title>Inventory Report</title></head>
-              <body style="font-family: sans-serif; padding: 20px;">
-                  <h2>PawPals Clinic Inventory Report</h2>
-                  <p>Date: ${new Date().toLocaleString()}</p>
-                  <table border="1" style="width:100%; border-collapse: collapse; text-align: left;">
+              <head>
+                <title>Clinic Status Report</title>
+                <style>
+                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; color: #333; }
+                    h1 { color: #2c3e50; margin-bottom: 5px; text-align: center; }
+                    .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
+                    .meta { color: #888; font-size: 14px; }
+                    
+                    /* Grid Layout (2x2) */
+                    .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; }
+                    .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+                    .card h3 { margin-top: 0; color: #1976D2; border-bottom: 1px solid #f0f0f0; padding-bottom: 10px; font-size: 16px; }
+                    
+                    /* Lists */
+                    ul { padding-left: 20px; margin: 0; }
+                    li { margin-bottom: 6px; font-size: 13px; color: #555; }
+                    .highlight { font-weight: bold; color: #333; }
+                    .badge-red { color: #d32f2f; font-weight: bold; }
+                    .badge-green { color: #2e7d32; font-weight: bold; }
+                    
+                    /* Table */
+                    table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
+                    th { background: #f8f9fa; padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; }
+                    td { padding: 10px; border-bottom: 1px solid #eee; }
+                    tr:nth-child(even) { background-color: #fcfcfc; }
+                </style>
+              </head>
+              <body>
+                  <div class="header">
+                      <h1>PawPals Clinic Report</h1>
+                      <div class="meta">Generated on ${new Date().toLocaleString()}</div>
+                  </div>
+
+                  <div class="dashboard-grid">
+                      
+                      <div class="card">
+                          <h3>📦 Inventory Health</h3>
+                          <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                              <span>Total Items:</span>
+                              <span class="highlight">${totalItems}</span>
+                          </div>
+                          <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                              <span>Low Stock Alerts:</span>
+                              <span class="${lowStockCount > 0 ? 'badge-red' : 'badge-green'}">${lowStockCount} items</span>
+                          </div>
+                          <div style="margin-top:15px;">
+                              <strong>⚠️ Expiring Soon (< 60 days):</strong>
+                              ${expiringItems.length > 0 ? `
+                                  <ul style="margin-top:5px;">
+                                      ${expiringItems.map(i => `<li>${i.name} - <span class="badge-red">${i.expiryDate}</span></li>`).join('')}
+                                  </ul>
+                              ` : '<div style="font-style:italic; font-size:12px; color:#888">No expiring items</div>'}
+                          </div>
+                      </div>
+
+                      <div class="card">
+                          <h3>📅 Appointment Overview</h3>
+                          <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                              <span>Total Records:</span>
+                              <span class="highlight">${totalAppts}</span>
+                          </div>
+                          <div style="margin-top:10px;">
+                              <strong>Breakdown by Reason:</strong>
+                              <ul style="margin-top:5px;">
+                                  ${Object.entries(reasonCounts).filter(([,c])=>c>0).map(([k,v]) => `<li>${k}: ${v}</li>`).join('')}
+                              </ul>
+                          </div>
+                      </div>
+
+                      <div class="card">
+                          <h3>📥 Recently Added Stock</h3>
+                          ${recentStockLogs.length > 0 ? `
+                              <ul>
+                                  ${recentStockLogs.map(log => `
+                                      <li>
+                                          <strong>${log.itemName}</strong> 
+                                          <span class="badge-green">+${log.change} ${log.unit}</span>
+                                      </li>
+                                  `).join('')}
+                              </ul>
+                          ` : '<div style="color:#888; font-style:italic">No recent additions</div>'}
+                      </div>
+
+                      <div class="card">
+                          <h3>🔜 Upcoming Schedule</h3>
+                          ${upcomingAppts.length > 0 ? `
+                              <ul>
+                                  ${upcomingAppts.map(app => `
+                                      <li>
+                                          <strong>${app.date}</strong>: ${app.petName} 
+                                          <br/><span style="color:#888; font-size:11px">${app.reason}</span>
+                                      </li>
+                                  `).join('')}
+                              </ul>
+                          ` : '<div style="color:#888; font-style:italic">No upcoming appointments</div>'}
+                      </div>
+                  </div>
+
+                  <h3>Detailed Inventory List</h3>
+                  <table>
                       <thead>
-                          <tr style="background: #f1f1f1;">
-                              <th style="padding: 10px;">Item Name</th>
+                          <tr>
+                              <th>Item Name</th>
                               <th>Category</th>
                               <th>Quantity</th>
                               <th>Expiry Date</th>
@@ -346,7 +535,7 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
                       <tbody>
                           ${inventory.map(item => `
                               <tr>
-                                  <td style="padding: 10px;">${item.name}</td>
+                                  <td>${item.name}</td>
                                   <td>${item.category}</td>
                                   <td>${item.quantity} ${item.unit}</td>
                                   <td>${item.expiryDate || "N/A"}</td>
@@ -359,44 +548,72 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
           </html>
       `);
       printWindow.document.close();
-      printWindow.print();
   };
-  
-  const printSummaryReport = () => {
+// --- PRINT INVENTORY REPORT (Dedicated) ---
+  const printInventoryReport = () => {
       const printWindow = window.open('', '_blank');
+      
+      const today = new Date().toLocaleDateString();
+      const totalItems = inventory.length;
+      
+      // Generate rows
+      const tableRows = inventory.map(item => {
+          const status = getStockStatus(item);
+          return `
+              <tr>
+                  <td>${item.name}</td>
+                  <td>${item.category}</td>
+                  <td>${item.quantity}</td>
+                  <td>${item.unit}</td>
+                  <td>${item.expiryDate || "-"}</td>
+                  <td style="color:${status.color}; font-weight:bold;">${status.label}</td>
+              </tr>
+          `;
+      }).join('');
+
       printWindow.document.write(`
           <html>
-              <head><title>Summary Report</title></head>
-              <body style="font-family: sans-serif; padding: 20px;">
-                  <h2 style="color: #2196F3;">PawPals Clinic - Period Summary Report</h2>
-                  <p><strong>Period:</strong> ${reportStartDate} to ${reportEndDate}</p>
-                  <hr/>
-                  <div style="display: flex; gap: 20px; margin-top: 20px;">
-                      <div style="flex: 1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
-                          <h3>Inventory Activity</h3>
-                          <p>Items Received / Added: <strong>${generatedStats.itemsAdded}</strong></p>
-                          <p>Items Used / Issued: <strong>${generatedStats.itemsUsed}</strong></p>
-                          <p>Low Stock Alerts: <strong>${lowStockItems.length}</strong></p>
-                          <p>Expired Items: <strong>${expiredItems.length}</strong></p>
-                      </div>
-                      <div style="flex: 1; border: 1px solid #ddd; padding: 15px; border-radius: 8px;">
-                          <h3>Appointments</h3>
-                          <p>Total Scheduled: <strong>${generatedStats.totalAppointments}</strong></p>
-                          <p>Completed: <strong>${generatedStats.completedAppointments}</strong></p>
-                          <p>Cancelled / Missed: <strong>${generatedStats.cancelledAppointments}</strong></p>
-                          <h4>Service Types Breakdown:</h4>
-                          <ul>
-                            ${Object.entries(serviceBreakdown).map(([key, val]) => `<li>${key}: ${val}</li>`).join('')}
-                          </ul>
-                      </div>
+              <head>
+                  <title>Inventory Report</title>
+                  <style>
+                      body { font-family: sans-serif; padding: 20px; color: #333; }
+                      h1 { margin-bottom: 5px; color: #2c3e50; }
+                      .meta { color: #666; font-size: 14px; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+                      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+                      th { background: #f4f4f4; padding: 10px; text-align: left; border-bottom: 2px solid #ddd; }
+                      td { padding: 8px; border-bottom: 1px solid #eee; }
+                      tr:nth-child(even) { background-color: #fafafa; }
+                  </style>
+              </head>
+              <body>
+                  <h1>📦 Current Inventory Report</h1>
+                  <div class="meta">
+                      Generated: ${today} <br/>
+                      Total Items: ${totalItems}
                   </div>
+                  <table>
+                      <thead>
+                          <tr>
+                              <th>Item Name</th>
+                              <th>Category</th>
+                              <th>Qty</th>
+                              <th>Unit</th>
+                              <th>Expiry</th>
+                              <th>Status</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          ${tableRows}
+                      </tbody>
+                  </table>
               </body>
           </html>
       `);
+      
       printWindow.document.close();
+      printWindow.focus();
       printWindow.print();
   };
-
   // --- ACTIONS ---
   const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
   
@@ -459,13 +676,6 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
       });
   };
 
-const handleQuickUsage = (item) => {
-    setUsageModal({
-        show: true,
-        item: item,
-        qty: 1 
-    });
-};
 const confirmQuickUsage = async () => {
     const { item, qty } = usageModal;
     if (!item || qty <= 0) return;
@@ -496,8 +706,11 @@ const confirmQuickUsage = async () => {
     }
   };
 
-  const handleSaveInventory = async (e) => {
+const handleSaveInventory = async (e) => {
       e.preventDefault();
+      if (isSavingInventory) return; // Stop if already saving
+
+      setIsSavingInventory(true); // Lock the button
       try {
           if (editingInventoryId) {
               const oldItem = inventory.find(i => i.id === editingInventoryId);
@@ -539,6 +752,8 @@ const confirmQuickUsage = async () => {
       } catch (err) {
           console.error(err);
           showToast("Error saving inventory.", "error");
+      } finally {
+          setIsSavingInventory(false); // Unlock the button no matter what
       }
   };
 
@@ -546,38 +761,6 @@ const confirmQuickUsage = async () => {
   const handleCalendarApptClick = (appt) => {
       setApptSubTab(appt.status);
       setApptViewMode("list");
-  };
-
-  // --- REPORT CLICK HANDLER ---
-  const handleReportClick = (type) => {
-      let data = [];
-      let title = "";
-      
-      switch(type) {
-          case 'added':
-              title = "Inventory Items Added";
-              data = generatedStats.addedLogs;
-              break;
-          case 'used':
-              title = "Inventory Items Used / Issued";
-              data = generatedStats.usedLogs;
-              break;
-          case 'appointments':
-              title = "Scheduled Appointments";
-              data = generatedStats.rangeApps;
-              break;
-          case 'lowstock':
-              title = "Current Low Stock Alerts";
-              data = lowStockItems;
-              break;
-          case 'expired':
-              title = "Expired Items";
-              data = expiredItems;
-              break;
-          default:
-              return;
-      }
-      setReportDetailModal({ type, title, data });
   };
 
   const openConsultModal = (apptId) => {
@@ -805,21 +988,51 @@ const confirmQuickUsage = async () => {
       );
   };
 
-  const getNotifications = () => {
-    let notifs = [];
-    appointments.filter(a => a.status === 'Pending').forEach(a => {
-        notifs.push({ id: a.id, type: 'appointment', subType: 'Pending', text: `New Request: ${a.petName} (${a.date})`, date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(), linkTab: 'appointments', linkSubTab: 'Pending' });
-    });
-    appointments.filter(a => a.status === 'Cancelled').slice(0, 5).forEach(a => {
-        notifs.push({ id: a.id, type: 'appointment', subType: 'Cancelled', text: `Cancelled: ${a.petName}`, date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(), linkTab: 'appointments', linkSubTab: 'Cancelled' });
-    });
-    const unreadMsgs = allMessages.filter(m => m.senderId !== auth.currentUser.uid && !m.read && m.senderId !== "AI_BOT");
-    const unreadOwners = [...new Set(unreadMsgs.map(m => m.senderId))];
-    unreadOwners.forEach(ownerId => {
-        const owner = owners.find(o => o.id === ownerId);
-        notifs.push({ id: `msg-${ownerId}`, type: 'message', text: `Msg from ${owner ? owner.firstName : 'Client'}`, date: new Date(), linkTab: 'messages', ownerData: owner });
-    });
-    return notifs.sort((a, b) => b.date - a.date).filter(n => !readNotifIds.includes(n.id));
+const getNotifications = () => {
+      let notifs = [];
+      
+      // Filter out appointments that are already marked as read in DB
+      appointments.filter(a => a.status === 'Pending' && !a.read).forEach(a => {
+          notifs.push({ 
+              id: a.id, 
+              type: 'appointment', 
+              subType: 'Pending', 
+              text: `New Request: ${a.petName} (${a.date})`, 
+              date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(), 
+              linkTab: 'appointments', 
+              linkSubTab: 'Pending' 
+          });
+      });
+
+      // Filter out cancelled apps that are read
+      appointments.filter(a => a.status === 'Cancelled' && !a.read).slice(0, 5).forEach(a => {
+          notifs.push({ 
+              id: a.id, 
+              type: 'appointment', 
+              subType: 'Cancelled', 
+              text: `Cancelled: ${a.petName}`, 
+              date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(), 
+              linkTab: 'appointments', 
+              linkSubTab: 'Cancelled' 
+          });
+      });
+
+      // Messages (already have a 'read' field in your DB, so this works fine)
+      const unreadMsgs = allMessages.filter(m => m.senderId !== auth.currentUser.uid && !m.read && m.senderId !== "AI_BOT");
+      const unreadOwners = [...new Set(unreadMsgs.map(m => m.senderId))];
+      
+      unreadOwners.forEach(ownerId => {
+          const owner = owners.find(o => o.id === ownerId);
+          notifs.push({ 
+              id: `msg-${ownerId}`, 
+              type: 'message', 
+              text: `Msg from ${owner ? owner.firstName : 'Client'}`, 
+              date: new Date(), 
+              linkTab: 'messages', 
+              ownerData: owner 
+          });
+      });
+      return notifs.sort((a, b) => b.date - a.date).filter(n => !readNotifIds.includes(n.id));
   };
 
   const notificationList = getNotifications();
@@ -833,8 +1046,24 @@ const confirmQuickUsage = async () => {
       setShowNotifications(false);
   };
   
-  const handleMarkAllRead = () => { setReadNotifIds(prev => [...prev, ...notificationList.map(n => n.id)]); };
-  
+const handleMarkAllRead = async () => { const currentIds = notificationList.map(n => n.id);
+    setReadNotifIds(prev => [...prev, ...currentIds]);
+    notificationList.forEach(async (notif) => {
+        try {
+              if (notif.type === 'message') {
+                  // For messages, we find all unread messages from that sender
+                  const senderId = notif.id.replace('msg-', '');
+                  const unreadMsgs = allMessages.filter(m => m.senderId === senderId && !m.read);
+                  unreadMsgs.forEach(async (msg) => {
+                      await updateDoc(doc(db, "messages", msg.id), { read: true });
+                  });
+              } else if (notif.type === 'appointment') {
+                  await updateDoc(doc(db, "appointments", notif.id), { read: true });
+              }
+          } catch (err) { console.error("Error marking as read:", err); }
+      });
+  };
+
   const getTabStyle = (name) => ({
       padding: "15px",
       fontSize: "1.1rem",
@@ -865,7 +1094,11 @@ const confirmQuickUsage = async () => {
         <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
           
           <div style={{ position: "relative" }}>
-              <button onClick={() => setShowNotifications(!showNotifications)} style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
+              <button onClick={() => { if (!showNotifications) { handleMarkAllRead (); }
+                
+                setShowNotifications(!showNotifications);
+                 }}
+                style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
                   🔔{unreadCount > 0 && <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>{unreadCount}</span>}
               </button>
               {showNotifications && (
@@ -984,6 +1217,9 @@ const confirmQuickUsage = async () => {
             {activeTab === "records" && (
                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
                     <h3>Pet Records</h3>
+                    <span style={{ marginLeft: "15px", fontSize: "16px", color: "#666", fontWeight: "normal" }}>
+                        Total: {filteredRecords.length}
+                    </span>
                     
                     {/* Filter Controls */}
                     <div style={{ display: "flex", gap: "15px", marginBottom: "15px" }}>
@@ -1153,7 +1389,6 @@ const confirmQuickUsage = async () => {
             )}
 
             {/* --- INVENTORY TAB --- */}
-            {/* --- INVENTORY TAB --- */}
             {activeTab === "inventory" && (
                  <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
                     <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px"}}>
@@ -1220,7 +1455,6 @@ const confirmQuickUsage = async () => {
                                             <td style={{padding:"10px", color: status.label === 'Expired' ? 'red' : 'inherit'}}>{item.expiryDate || "-"}</td>
                                             <td style={{padding:"10px"}}><span style={{background:status.color, color:"white", padding:"3px 8px", borderRadius:"12px", fontSize:"11px"}}>{status.label}</span></td>
                                             <td style={{padding:"10px", textAlign:"center"}}>
-                                                <button onClick={() => handleQuickUsage(item)} style={{background:"#FF9800", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", marginRight:"5px", cursor:"pointer", fontSize:"11px"}}>-</button>
                                                 <button onClick={() => handleOpenEditInventory(item)} style={{background:"#2196F3", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", marginRight:"5px", cursor:"pointer", fontSize:"11px"}}>Edit</button>
                                                 <button onClick={() => handleDeleteInventory(item.id)} style={{background:"#f44336", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"11px"}}>Delete</button>
                                             </td>
@@ -1252,52 +1486,105 @@ const confirmQuickUsage = async () => {
                         {(reportStartDate && reportEndDate) ? (
                             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"20px"}}>
                                 {/* Inventory Stats Block */}
-                                <div style={{background:"white", borderRadius:"12px", border:"1px solid #eee", padding:"20px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-                                    <h3 style={{marginTop:0, borderBottom:"2px solid #2196F3", paddingBottom:"10px", color:"#2196F3"}}>Inventory Stats</h3>
-                                    <div onClick={() => handleReportClick('added')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer", transition:"background 0.2s"}} onMouseOver={e=>e.currentTarget.style.background="#f9f9f9"} onMouseOut={e=>e.currentTarget.style.background="white"}>
-                                        <span>Items Received / Added:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{generatedStats.itemsAdded}</span>
-                                    </div>
-                                    <div onClick={() => handleReportClick('used')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer"}} onMouseOver={e=>e.currentTarget.style.background="#f9f9f9"} onMouseOut={e=>e.currentTarget.style.background="white"}>
-                                        <span>Items Used / Issued:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{generatedStats.itemsUsed}</span>
-                                    </div>
-                                    <div onClick={() => handleReportClick('lowstock')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer", color:"#ff9800"}} onMouseOver={e=>e.currentTarget.style.background="#fff3e0"} onMouseOut={e=>e.currentTarget.style.background="white"}>
-                                        <span>⚠️ Low Stock Alerts:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{lowStockItems.length}</span>
-                                    </div>
-                                    <div onClick={() => handleReportClick('expired')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", cursor:"pointer", color:"#f44336"}} onMouseOver={e=>e.currentTarget.style.background="#ffebee"} onMouseOut={e=>e.currentTarget.style.background="white"}>
-                                        <span>⛔ Expired Items:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{expiredItems.length}</span>
-                                    </div>
-                                </div>
+                        <div style={{ background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
+                            <h4 style={{ marginTop: 0, color: "#444", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
+                        Inventory Overview
+                        </h4>
+    
+                        <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginTop: "15px" }}>
+                        {/* Total Count */}
+                        <div style={{ flex: "1", minWidth: "150px", borderRight: "1px solid #eee" }}>
+                        <div style={{ fontSize: "14px", color: "#888" }}>Total Unique Items</div>
+                        <div style={{ fontSize: "32px", fontWeight: "bold", color: "#2196F3" }}>
+                            {inventoryStats.totalItems}
+                        </div>
+                    <div style={{ fontSize: "12px", color: "#666" }}>Across {INVENTORY_CATEGORIES.length} categories</div>
+                </div>
+
+                    {/* Category Breakdown */}
+                <div style={{ flex: "2", minWidth: "250px", borderRight: "1px solid #eee" }}>
+                    <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Items by Category</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    {Object.entries(inventoryStats.categoryCounts).map(([cat, count]) => (
+                        <div key={cat} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                            <span>{cat}:</span>
+                            <span style={{ fontWeight: "bold" }}>{count}</span>
+                        </div>
+                     ))}
+                </div>
+            </div>
+
+{/* Recently Added (Shows what was just added) */}
+        <div style={{ flex: "2", minWidth: "250px" }}>
+            <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Recently Added Stock</div>
+            {inventoryStats.recentActivity.length > 0 ? (
+                <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "#555" }}>
+                    {inventoryStats.recentActivity.map(log => (
+                        <li key={log.id} style={{ marginBottom: "5px" }}>
+                            <strong>{log.name}</strong> 
+                            {/* Shows "+5 boxes" in green */}
+                            <span style={{ color: "#2e7d32", fontWeight: "bold", marginLeft: "6px" }}>
+                                +{log.added} {log.unit}
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <div style={{ fontSize: "13px", color: "#aaa", fontStyle: "italic" }}>No recent additions</div>
+            )}
+        </div>
+    </div>
+</div>
+
 
                                 {/* Appointments Stats Block */}
-                                <div style={{background:"white", borderRadius:"12px", border:"1px solid #eee", padding:"20px", boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
-                                    <h3 style={{marginTop:0, borderBottom:"2px solid #4CAF50", paddingBottom:"10px", color:"#4CAF50"}}>Appointment Stats</h3>
-                                    <div onClick={() => handleReportClick('appointments')} style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1", cursor:"pointer"}} onMouseOver={e=>e.currentTarget.style.background="#f9f9f9"} onMouseOut={e=>e.currentTarget.style.background="white"}>
-                                        <span>Total Scheduled:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px"}}>{generatedStats.totalAppointments}</span>
-                                    </div>
-                                    <div style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1"}}>
-                                        <span>✅ Completed:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px", color:"#4CAF50"}}>{generatedStats.completedAppointments}</span>
-                                    </div>
-                                    <div style={{display:"flex", justifyContent:"space-between", padding:"12px 0", borderBottom:"1px solid #f1f1f1"}}>
-                                        <span>❌ Cancelled / Missed:</span>
-                                        <span style={{fontWeight:"bold", fontSize:"18px", color:"#f44336"}}>{generatedStats.cancelledAppointments}</span>
-                                    </div>
-                                    
-                                    <div style={{marginTop:"15px"}}>
-                                        <h4 style={{margin:"0 0 10px 0", fontSize:"14px", color:"#666"}}>Service Breakdown:</h4>
-                                        <div style={{display:"flex", flexWrap:"wrap", gap:"5px"}}>
-                                            {Object.entries(serviceBreakdown).map(([key, val]) => (
-                                                <span key={key} style={{background:"#e3f2fd", color:"#1565C0", padding:"4px 8px", borderRadius:"4px", fontSize:"12px"}}>{key}: {val}</span>
-                                            ))}
-                                            {Object.keys(serviceBreakdown).length === 0 && <span style={{color:"#999", fontSize:"12px"}}>No data</span>}
-                                        </div>
-                                    </div>
-                                </div>
+<div style={{ background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
+    <h4 style={{ marginTop: 0, color: "#444", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
+        📅 Appointment Overview
+    </h4>
+    
+    <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginTop: "15px" }}>
+        {/* Total Count */}
+        <div style={{ flex: "1", minWidth: "150px", borderRight: "1px solid #eee" }}>
+            <div style={{ fontSize: "14px", color: "#888" }}>Total Appointments</div>
+            <div style={{ fontSize: "32px", fontWeight: "bold", color: "#4CAF50" }}>
+                {appointmentStats.totalAppts}
+            </div>
+            <div style={{ fontSize: "12px", color: "#666" }}>All time records</div>
+        </div>
+
+        {/* Reason Breakdown */}
+        <div style={{ flex: "2", minWidth: "250px", borderRight: "1px solid #eee" }}>
+            <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>By Visit Reason</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                {Object.entries(appointmentStats.reasonCounts).map(([reason, count]) => (
+                    count > 0 && (
+                        <div key={reason} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                            <span>{reason}:</span>
+                            <span style={{ fontWeight: "bold" }}>{count}</span>
+                        </div>
+                    )
+                ))}
+            </div>
+        </div>
+
+        {/* Upcoming List */}
+        <div style={{ flex: "2", minWidth: "250px" }}>
+            <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Upcoming Appointments</div>
+            {appointmentStats.upcoming.length > 0 ? (
+                <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "#555" }}>
+                    {appointmentStats.upcoming.map(app => (
+                        <li key={app.id} style={{ marginBottom: "5px" }}>
+                            <strong>{app.date}</strong> - {app.petName} <span style={{color:"#999"}}>({app.reason})</span>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                <div style={{ fontSize: "13px", color: "#aaa", fontStyle: "italic" }}>No upcoming appointments</div>
+            )}
+        </div>
+    </div>
+</div>
                             </div>
                         ) : (
                             <div style={{textAlign:"center", color:"#888", padding:"50px", border:"2px dashed #ddd", borderRadius:"12px"}}>
