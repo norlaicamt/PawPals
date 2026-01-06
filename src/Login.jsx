@@ -19,22 +19,61 @@ const Login = () => {
     setLoading(true);
     setError(""); 
 
+    // --- SECURITY CHECKS START ---
+    
+    // 1. Check numeric email
+    const localPart = email.split('@')[0];
+    if (/^\d+$/.test(localPart)) {
+        setError("Invalid email format (cannot be purely numeric).");
+        setLoading(false);
+        return;
+    }
+
+    // 2. Check identical password
+    if (password === email) {
+        setError("Invalid credentials: Password cannot match email.");
+        setLoading(false);
+        return;
+    }
+
+    /* NOTE: I removed the strict Password Regex for LOGIN.
+       It is bad practice to check complexity on Login because if you change
+       your rules later, old admins/staff with simple passwords won't be able to login.
+       Complexity should only be checked during SIGN UP.
+    */
+    // --- SECURITY CHECKS END ---
+
     try {
+      // 1. First, attempt to sign in
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       
+      // NOTE: We do NOT check verification here yet. We don't know the role yet.
+
+      // 2. Fetch the user details from Firestore
       const docRef = doc(db, "users", user.uid);
       const docSnap = await getDoc(docRef);
 
       if (docSnap.exists()) {
         const userData = docSnap.data();
-        
+        const role = userData.role; // "owner", "staff", or "admin"
+
+        // 3. Check if account is disabled
         if (userData.isDisabled === true) {
             await signOut(auth); 
             throw new Error("Your account has been disabled. Please contact the administrator.");
         }
 
-        const role = userData.role;
+        // --- NEW LOGIC: CONDITIONAL VERIFICATION ---
+        // Only enforce email verification if the user is an "owner".
+        // Staff and Admins bypass this check.
+        if (role === "owner" && !user.emailVerified) {
+             await signOut(auth); // Force logout
+             throw new Error("Email not verified. Please check your inbox.");
+        }
+        // -------------------------------------------
+
+        // 4. Navigate based on role
         switch (role) {
             case "owner": navigate("/owner-dashboard"); break;
             case "staff": navigate("/staff-dashboard"); break;
@@ -49,9 +88,19 @@ const Login = () => {
       }
     } catch (err) {
       console.error(err);
-      const message = err.code === 'auth/invalid-credential' 
-        ? "Incorrect email or password." 
-        : err.message; 
+      let message = err.message;
+      
+      // Handle Firebase specific errors
+      if (err.code === 'auth/invalid-credential') {
+          message = "Incorrect email or password.";
+      } 
+      else if (err.code === 'auth/user-not-found') {
+          message = "Account not found.";
+      }
+      // Handle the manual verification error cleanly
+      else if (message.includes("Email not verified")) {
+          message = "Please verify your email address before logging in.";
+      }
       
       setError(message);
     }
@@ -62,7 +111,6 @@ const Login = () => {
     <div className="auth-container">
       <div className="auth-card" style={{ position: "relative" }}>
         
-        {/* ADDED BACK BUTTON */}
         <button 
           onClick={() => navigate("/")} 
           style={{
@@ -149,7 +197,7 @@ const Login = () => {
             style={{ background: "#1565C0", color: "white", width: "100%", padding: "12px", marginTop: "10px" }}
             disabled={loading}
           >
-            {loading ? "Verifying Access..." : "Login"}
+            {loading ? "Verifying..." : "Login"}
           </button>
         </form>
         
