@@ -119,6 +119,8 @@ const StaffDashboard = () => {
   const [reportEndDate, setReportEndDate] = useState("");
   const [reportDetailModal, setReportDetailModal] = useState(null);
 
+  const [showPrintModal, setShowPrintModal] = useState(false);
+
   // --- CUSTOM CONFIRMATION MODAL STATE ---
   const [confirmModal, setConfirmModal] = useState({ 
       show: false, 
@@ -151,6 +153,7 @@ const StaffDashboard = () => {
   const [inventoryData, setInventoryData] = useState({
       name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5});
 const [inventoryFilter, setInventoryFilter] = useState("All");
+
   // --- DATA FETCHING ---
   useEffect(() => {
     const unsubAppts = onSnapshot(query(collection(db, "appointments"), orderBy("date", "desc")), (snap) => 
@@ -549,71 +552,103 @@ const [inventoryFilter, setInventoryFilter] = useState("All");
       `);
       printWindow.document.close();
   };
-// --- PRINT INVENTORY REPORT (Dedicated) ---
-  const printInventoryReport = () => {
-      const printWindow = window.open('', '_blank');
-      
-      const today = new Date().toLocaleDateString();
-      const totalItems = inventory.length;
-      
-      // Generate rows
-      const tableRows = inventory.map(item => {
-          const status = getStockStatus(item);
-          return `
-              <tr>
-                  <td>${item.name}</td>
-                  <td>${item.category}</td>
-                  <td>${item.quantity}</td>
-                  <td>${item.unit}</td>
-                  <td>${item.expiryDate || "-"}</td>
-                  <td style="color:${status.color}; font-weight:bold;">${status.label}</td>
-              </tr>
-          `;
-      }).join('');
+// --- UPDATED PRINT INVENTORY REPORT ---
+const printInventoryReport = (filterType = "All") => {
+    const printWindow = window.open('', '_blank');
+    const today = new Date().toLocaleDateString();
+    
+    // 1. Filter the inventory based on selection
+    let filteredInventory = [];
+    let reportTitle = "";
 
-      printWindow.document.write(`
-          <html>
-              <head>
-                  <title>Inventory Report</title>
-                  <style>
-                      body { font-family: sans-serif; padding: 20px; color: #333; }
-                      h1 { margin-bottom: 5px; color: #2c3e50; }
-                      .meta { color: #666; font-size: 14px; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-                      table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-                      th { background: #f4f4f4; padding: 10px; text-align: left; border-bottom: 2px solid #ddd; }
-                      td { padding: 8px; border-bottom: 1px solid #eee; }
-                      tr:nth-child(even) { background-color: #fafafa; }
-                  </style>
-              </head>
-              <body>
-                  <h1>📦 Current Inventory Report</h1>
-                  <div class="meta">
-                      Generated: ${today} <br/>
-                      Total Items: ${totalItems}
-                  </div>
-                  <table>
-                      <thead>
-                          <tr>
-                              <th>Item Name</th>
-                              <th>Category</th>
-                              <th>Qty</th>
-                              <th>Unit</th>
-                              <th>Expiry</th>
-                              <th>Status</th>
-                          </tr>
-                      </thead>
-                      <tbody>
-                          ${tableRows}
-                      </tbody>
-                  </table>
-              </body>
-          </html>
-      `);
-      
-      printWindow.document.close();
-      printWindow.focus();
-      printWindow.print();
-  };
+    if (filterType === "Low Stock") {
+        // Items that are low but not empty (0 < qty <= threshold)
+        // OR you can include 0 if you prefer. Here I follow your status logic.
+        filteredInventory = inventory.filter(i => i.quantity > 0 && i.quantity <= i.threshold);
+        reportTitle = "Low Stock Inventory Report";
+    } else if (filterType === "Out of Stock") {
+        // Items with 0 or less
+        filteredInventory = inventory.filter(i => i.quantity <= 0);
+        reportTitle = "Out of Stock Inventory Report";
+    } else {
+        // "All Stock"
+        filteredInventory = inventory;
+        reportTitle = "Full Inventory Report";
+    }
+
+    const totalItems = filteredInventory.length;
+
+    // Optional: Alert if report is empty
+    if (totalItems === 0) {
+        alert(`No items found for '${filterType}'.`);
+        printWindow.close();
+        return;
+    }
+    
+    // 2. Generate rows
+    const tableRows = filteredInventory.map(item => {
+        const status = getStockStatus(item);
+        return `
+            <tr>
+                <td>${item.name}</td>
+                <td>${item.category}</td>
+                <td>${item.quantity}</td>
+                <td>${item.unit}</td>
+                <td>${item.expiryDate || "-"}</td>
+                <td style="color:${status.color}; font-weight:bold;">${status.label}</td>
+            </tr>
+        `;
+    }).join('');
+
+    // 3. Write HTML
+    printWindow.document.write(`
+        <html>
+            <head>
+                <title>${reportTitle}</title>
+                <style>
+                    body { font-family: sans-serif; padding: 20px; color: #333; }
+                    h1 { margin-bottom: 5px; color: #2c3e50; }
+                    .meta { color: #666; font-size: 14px; margin-bottom: 20px; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+                    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+                    th { background: #f4f4f4; padding: 10px; text-align: left; border-bottom: 2px solid #ddd; }
+                    td { padding: 8px; border-bottom: 1px solid #eee; }
+                    tr:nth-child(even) { background-color: #fafafa; }
+                </style>
+            </head>
+            <body>
+                <h1>📦 ${reportTitle}</h1>
+                <div class="meta">
+                    Generated: ${today} <br/>
+                    Filter: ${filterType} <br/>
+                    Total Items: ${totalItems}
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Item Name</th>
+                            <th>Category</th>
+                            <th>Qty</th>
+                            <th>Unit</th>
+                            <th>Expiry</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRows}
+                    </tbody>
+                </table>
+            </body>
+        </html>
+    `);
+    
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+    
+    // Close the options modal after printing
+    setShowPrintModal(false);
+};
+
   // --- ACTIONS ---
   const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
   
@@ -927,7 +962,7 @@ const handleSaveInventory = async (e) => {
           
           cells.push(
               <div key={d} style={{minHeight:"80px", background: isSaturday ? "#eeeeee" : (isToday ? "#e3f2fd" : "white"), border:"1px solid #eee", padding:"5px", opacity: isSaturday?0.6:1 }}>
-                  <div style={{fontWeight:"bold", color: isSaturday?"red":(isToday?"#1565C0":"#333")}}>{d} {isSaturday&&"(Closed)"}</div>
+                  <div style={{fontWeight:"bold", color: isSaturday?"red":(isToday?"#1565C0":"#333")}}>{d} {isSaturday&&""}</div>
                   <div style={{display:"flex", flexDirection:"column", gap:"2px", maxHeight: "60px", overflowY: "auto"}}>
                       {dayAppts.map(a => (
                           <div key={a.id} onClick={() => handleCalendarApptClick(a)} style={{background:a.status==='Pending'?'orange':'green', color:"white", padding:"2px", borderRadius:"3px", fontSize:"10px", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis", cursor: "pointer"}}>
@@ -1184,21 +1219,20 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                                         <div key={appt.id} className="list-item" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
                                             <div>
                                                 <div style={{fontWeight:"bold", fontSize:"16px"}}>{appt.petName} <span style={{fontSize:"12px", color:"#666", fontWeight:"normal"}}>({appt.type || 'Regular'})</span></div>
-                                                <div style={{fontSize:"14px", color:"#555"}}>📅 {appt.date} at {appt.time}</div>
-                                                <div style={{fontSize:"14px", color:"#777"}}>Reason: {appt.reason}</div>
+                                                <div style={{fontSize:"12px", color:"#555"}}>{appt.date} at {appt.time}</div>
+                                                <div style={{fontSize:"11px", color:"#777"}}>Reason: {appt.reason}</div>
                                             </div>
                                             <div style={{display:"flex", gap:"10px"}}>
                                                 {appt.status === "Pending" && (
                                                     <>
                                                         <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{background:"#4CAF50"}}>Approve</button>
-                                                        {/* UPDATED: Open Modal instead of direct update */}
                                                         <button onClick={() => openDeclineModal(appt.id)} className="action-btn" style={{background:"#f44336"}}>Decline</button>
                                                     </>
                                                 )}
                                                 {appt.status === "Approved" && (
                                                     <>
-                                                        <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{background:"#2196F3"}}>Consultation</button>
-                                                        <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{background:"#f44336"}}>Cancel</button>
+                                                        <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{background:"#2196F3", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500", transition: "background 0.2s"}}>Consultation</button>
+                                                        <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{background:"#f44336", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500", transition: "background 0.2s"}}>Cancel</button>
                                                     </>
                                                 )}
                                             </div>
@@ -1256,14 +1290,14 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                     <div style={{ flex: 1, overflowY: "auto" }}>
                         {viewingPet ? (
                             <div>
-                                <button onClick={() => setViewingPet(null)} style={{ marginBottom: "15px", padding: "5px 10px", cursor: "pointer", border:"1px solid #ccc", borderRadius:"4px", background:"white" }}>← Back to List</button>
+                                <button onClick={() => setViewingPet(null)} style={{ marginBottom: "15", padding: "5px 10px", cursor: "pointer", border:"1px solid #ccc", borderRadius:"4px", background:"white", fontSize: "12px"}}>← Back to List</button>
                                 <div style={{ background: "#f9f9f9", padding: "20px", borderRadius: "8px", border: "1px solid #ddd" }}>
-                                    <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "16px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
+                                    <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
                                     <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
                                     <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
                                     <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
                                     
-                                    <h4 style={{ marginTop: "20px", borderBottom: "1px solid #ccc", paddingBottom: "5px" }}>Medical History</h4>
+                                    <h4 style={{ marginTop: "10px", borderBottom: "1px solid #ccc", paddingBottom: "5px", fontSize: "16px", color: "#1c65a1ff"}}>Medical History</h4>
                                     {appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").length === 0 ? <p style={{color:"#888"}}>No history yet.</p> : (
                                         appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").map(hist => (
                                             <div key={hist.id} style={{ background: "white", padding: "10px", borderRadius: "6px", marginBottom: "10px", border: "1px solid #eee" }}>
@@ -1394,7 +1428,7 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                     <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px"}}>
                         <h3>Inventory Management</h3>
                         <div style={{display:"flex", gap:"10px"}}>
-                            <button onClick={printInventoryReport} style={{background:"#607D8B", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>🖨️ Print Report</button>
+                            <button onClick={() => setShowPrintModal(true)} style={{background:"#607D8B", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>🖨️ Print Report</button>
                             <button onClick={handleOpenAddInventory} style={{background:"#4CAF50", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>+ Add Item</button>
                         </div>
                     </div>
@@ -1406,7 +1440,8 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                             style={{
                                 padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
                                 background: inventoryFilter === "All" ? "#2196F3" : "#e0e0e0",
-                                color: inventoryFilter === "All" ? "white" : "#333"
+                                color: inventoryFilter === "All" ? "white" : "#333",
+                                fontSize: "12px"
                             }}
                         >
                             All Items
@@ -1416,10 +1451,11 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                             style={{
                                 padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
                                 background: inventoryFilter === "LowStock" ? "#ff9800" : "#e0e0e0",
-                                color: inventoryFilter === "LowStock" ? "white" : "#333"
+                                color: inventoryFilter === "LowStock" ? "white" : "#333",
+                                fontSize: "12px"
                             }}
                         >
-                            ⚠️ Low Stock
+                            Low Stock/Out of Stock
                         </button>
                     </div>
 
@@ -1646,10 +1682,12 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                       
                       <div>
                           <strong>Symptoms:</strong>
-                          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"5px", maxHeight:"100px", overflowY:"auto", border:"1px solid #ddd", padding:"10px", marginTop:"5px", borderRadius:"6px"}}>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "5px", marginTop: "5px" }}>
                               {SYMPTOM_OPTIONS.map(sym => (
-                                  <label key={sym} style={{display:"flex", alignItems:"center", gap:"5px", fontSize:"13px"}}>
-                                      <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)} /> {sym}
+                                  <label key={sym} style={{display:"flex", alignItems:"center", gap:"6px", fontSize:"10px", cursor: "pointer", background: consultData.symptoms.includes(sym) ? "#e3f2fd" : "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", width: "100%", boxSizing: "border-box"}}>
+                                      <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)}
+                                      style={{ cursor: "pointer", accentColor: "#2196F3", width: "13px", height: "13px", margin: 0, appearance: "auto", WebkitAppearance: "auto" }} />
+                                      {sym} 
                                   </label>
                               ))}
                           </div>
@@ -1681,6 +1719,52 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
               </div>
           </div>
       )}
+
+    {/* --- PRINT OPTIONS MODAL --- */}
+{showPrintModal && (
+    <div style={{
+        position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+        backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000
+    }}>
+        <div style={{
+            background: "white", padding: "30px", borderRadius: "12px", width: "350px", maxWidth: "90%",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.2)", textAlign: "center", display: "flex", flexDirection: "column", gap: "15px"
+        }}>
+            <h3 style={{ margin: "0 0 10px 0", color: "#2c3e50" }}>Select Report Type</h3>
+            <p style={{ margin: 0, color: "#666", fontSize: "14px", marginBottom: "10px" }}>
+                Which inventory items would you like to print?
+            </p>
+
+            <button 
+                onClick={() => printInventoryReport("All")}
+                style={{ padding: "12px", borderRadius: "8px", border: "1px solid #ddd", background: "white", cursor: "pointer", fontWeight: "600", color: "#333", display:"flex", justifyContent:"center", gap:"10px" }}
+            >
+                All Stock
+            </button>
+
+            <button 
+                onClick={() => printInventoryReport("Low Stock")}
+                style={{ padding: "12px", borderRadius: "8px", border: "none", background: "#ff9800", cursor: "pointer", fontWeight: "600", color: "white", display:"flex", justifyContent:"center", gap:"10px" }}
+            >
+                Low Stock
+            </button>
+
+            <button 
+                onClick={() => printInventoryReport("Out of Stock")}
+                style={{ padding: "12px", borderRadius: "8px", border: "none", background: "#f44336", cursor: "pointer", fontWeight: "600", color: "white", display:"flex", justifyContent:"center", gap:"10px" }}
+            >
+                Out of Stock
+            </button>
+
+            <button 
+                onClick={() => setShowPrintModal(false)}
+                style={{ marginTop: "10px", background: "transparent", border: "none", color: "#999", cursor: "pointer", textDecoration: "underline" }}
+            >
+                Cancel
+            </button>
+        </div>
+    </div>
+)}
 
       {/* 3. Inventory Add/Edit Modal */}
       {showInventoryModal && (
