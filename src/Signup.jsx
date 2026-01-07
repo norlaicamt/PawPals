@@ -6,7 +6,7 @@ import { doc, setDoc } from "firebase/firestore";
 import { useNavigate, Link } from "react-router-dom";
 import logoImg from "./assets/logo.png";
 
-// Helper component
+// Helper component for checklist
 const RequirementItem = ({ fulfilled, text }) => (
   <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: fulfilled ? "#2e7d32" : "#666", marginBottom: "2px" }}>
     {fulfilled ? (
@@ -27,6 +27,10 @@ const Signup = () => {
   const [lname, setLname] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(""); 
+  
+  // 1. New State for the Success Modal
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  
   const navigate = useNavigate();
 
   const passwordValidations = {
@@ -72,8 +76,9 @@ const Signup = () => {
       });
 
       await sendEmailVerification(user);
-      alert("Account created successfully! Please verify your email.");
-      navigate("/login");
+
+      // 2. CHANGED: Replaced alert() and immediate navigation with the Modal
+      setShowSuccessModal(true);
 
     } catch (error) {
       console.error(error);
@@ -89,7 +94,46 @@ const Signup = () => {
 
   return (
     <div className="auth-container">
-      {/* Slightly wider maxWidth to comfortably fit the side-by-side passwords */}
+      
+      {/* 3. NEW: Custom Success Modal Overlay */}
+      {showSuccessModal && (
+        <div style={{
+          position: "fixed",
+          top: 0, left: 0, width: "100%", height: "100%",
+          backgroundColor: "rgba(0,0,0,0.6)", // Dark transparent background
+          display: "flex", justifyContent: "center", alignItems: "center",
+          zIndex: 9999
+        }}>
+          <div style={{
+            backgroundColor: "white", padding: "30px", borderRadius: "12px",
+            textAlign: "center", maxWidth: "400px", width: "90%",
+            boxShadow: "0 5px 15px rgba(0,0,0,0.3)"
+          }}>
+             {/* Success Icon */}
+            <div style={{ margin: "0 auto 15px", width: "50px", height: "50px", borderRadius: "50%", background: "#e8f5e9", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#255bb7ff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+            
+            <h3 style={{ margin: "0 0 10px", color: "#333" }}>Account Created!</h3>
+            <p style={{ color: "#666", marginBottom: "25px", lineHeight: "1.5" }}>
+              Your account has been successfully created. Please check your email to verify your account before logging in.
+            </p>
+            
+            <button 
+              onClick={() => navigate("/login")}
+              style={{
+                background: "#255bb7ff", color: "white", border: "none",
+                padding: "12px 25px", borderRadius: "6px", cursor: "pointer",
+                fontWeight: "bold", fontSize: "14px", width: "100%"
+              }}
+            >
+              Continue to Login
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Auth Card (Existing Code) */}
       <div className="auth-card" style={{maxWidth: "600px", position: "relative", padding: "30px"}}>
         
         <button 

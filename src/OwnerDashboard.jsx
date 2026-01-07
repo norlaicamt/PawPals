@@ -4,6 +4,8 @@ import { signOut, updatePassword } from "firebase/auth";
 import { collection, addDoc, query, where, onSnapshot, orderBy, doc, updateDoc, getDoc, getDocs } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png";
+import EditPetModal from "./EditPetModal";
+
 
 // --- CONSTANTS ---
 const DOG_BREEDS = [
@@ -49,7 +51,8 @@ const OwnerDashboard = () => {
   const scrollRef = useRef();
 
   const [activeTab, setActiveTab] = useState("pets");
-  const [apptFilter, setApptFilter] = useState("Pending");
+  const [apptFilter, setApptFilter] = useState("Pending")
+  const [requestEditPet, setRequestEditPet] = useState(null);;
 
   // --- MOBILE SUB-TAB STATES ---
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
@@ -493,28 +496,6 @@ const OwnerDashboard = () => {
   };
 
   const openAddPetModal = () => { resetPetForm(); setShowPetModal(true); };
-
-  const openEditPetModal = (pet) => {
-    setPetName(pet.name); setAge(pet.age); setAgeUnit(pet.ageUnit || "Years");
-    setGender(pet.gender); setMedicalHistory(pet.medicalHistory || ""); 
-    setEditingPetId(pet.id); setIsEditingPet(true);
-
-    // UPDATED: Removed Bird, Rabbit, Hamster from logic
-    if (["Dog", "Cat"].includes(pet.species)) {
-        setSpecies(pet.species); setOtherSpecies("");
-    } else {
-        setSpecies("Other"); setOtherSpecies(pet.species);
-    }
-
-    if (DOG_BREEDS.includes(pet.breed) || CAT_BREEDS.includes(pet.breed)) {
-        setBreed(pet.breed); setOtherBreed("");
-    } else {
-        if (pet.species === "Dog" || pet.species === "Cat") { setBreed("Other"); setOtherBreed(pet.breed); } 
-        else { setBreed(pet.breed); }
-    }
-    setShowPetModal(true);
-  };
-
   const handlePetSubmit = async (e) => {
     e.preventDefault();
     if (isSaving) return; 
@@ -862,9 +843,9 @@ const OwnerDashboard = () => {
                                                              <span style={{color: "red", fontWeight: "bold", fontSize: "12px", padding: "4px 8px", background: "#ffebee", borderRadius: "4px"}}>Deletion Pending</span>
                                                         ) : (
                                                             <div style={{display: "flex", gap: "8px"}}>
-                                                                <button onClick={() => handleViewPetHistory(pet.id)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "12px", fontWeight: "bold"}}>View Records</button>
-                                                                <button onClick={() => openEditPetModal(pet)} style={{padding: "6px 12px", background: "none", color: "#666", border: "1px solid #ddd", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Edit</button>
-                                                                <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "12px"}}>Delete</button>
+                                                                <button onClick={() => handleViewPetHistory(pet.id)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}}>Records</button>
+                                                                <button onClick={() => setRequestEditPet(pet)} style={{padding: "6px 12px", background: "#ff9800", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}} > Request Edit </button>
+                                                                <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}}>Delete</button>
                                                             </div>
                                                         )}
                                                     </td>
@@ -885,6 +866,7 @@ const OwnerDashboard = () => {
                                 <select value={recordFilterPetId} onChange={(e) => setRecordFilterPetId(e.target.value)} style={{padding: "10px", borderRadius: "6px", border: "1px solid #ddd", minWidth: "200px"}}>
                                     <option value="all">All Pets</option>
                                     {myPets.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+
                                 </select>
                             </div>
 
@@ -1219,6 +1201,7 @@ const OwnerDashboard = () => {
               </div>
           </div>
       )}
+      {requestEditPet && (  <EditPetModal pet={requestEditPet} onClose={() => setRequestEditPet(null)} />)}
 
       {/* 7. Logout Confirm Modal */}
       {confirmModal.show && (

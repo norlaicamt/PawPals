@@ -84,7 +84,7 @@ const Login = () => {
         }
       } else {
         await signOut(auth);
-        throw new Error("User record not found in database.");
+        throw new Error("Email address not found.");
       }
     } catch (err) {
       console.error(err);

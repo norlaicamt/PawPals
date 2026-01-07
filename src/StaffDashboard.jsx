@@ -95,8 +95,8 @@ const StaffDashboard = () => {
 
   const [consultData, setConsultData] = useState({ 
       date: "",
-      reason: "",
-      symptoms: [], 
+      reason: [],
+      symptoms: [],
       diagnosis: "", 
       medicine: "", 
       notes: "",
