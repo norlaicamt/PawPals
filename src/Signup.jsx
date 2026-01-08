@@ -41,7 +41,16 @@ const Signup = () => {
     hasLength: password.length >= 8,
   };
 
-  const validateInputs = () => {
+  
+const validateInputs = () => {
+    // 1. NEW: Check for invalid characters in names (Letters and spaces only)
+    const nameRegex = /^[a-zA-Z\s]*$/;
+    
+    if (!nameRegex.test(fname) || !nameRegex.test(lname)) {
+      return "Names must contain only letters (no numbers or symbols).";
+    }
+
+    // Existing checks...
     if (email) {
       const localPart = email.split('@')[0];
       if (/^\d+$/.test(localPart)) return "Email address cannot consist only of numbers.";
@@ -56,6 +65,7 @@ const Signup = () => {
     return null;
   };
 
+  
   const handleSignup = async (e) => {
     e.preventDefault();
     setError(""); 
@@ -157,21 +167,38 @@ const Signup = () => {
           
           {/* ROW 1: NAMES */}
           <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-            <input 
-                type="text" 
-                placeholder="First Name" 
-                onChange={(e) => setFname(e.target.value)} 
-                required 
-                style={{flex: 1, minWidth: "150px"}}
-            />
-            <input 
-                type="text" 
-                placeholder="Last Name" 
-                onChange={(e) => setLname(e.target.value)} 
-                required 
-                style={{flex: 1, minWidth: "150px"}}
-            />
-          </div>
+  <input 
+      type="text" 
+      placeholder="First Name" 
+      onChange={(e) => setFname(e.target.value)} 
+      required 
+      style={{
+          flex: 1, 
+          minWidth: "150px",
+          // Highlights border red if invalid characters are present
+          border: fname && !/^[a-zA-Z\s]*$/.test(fname) ? "1px solid red" : "1px solid #ccc"
+      }}
+  />
+  <input 
+      type="text" 
+      placeholder="Last Name" 
+      onChange={(e) => setLname(e.target.value)} 
+      required 
+      style={{
+          flex: 1, 
+          minWidth: "150px",
+          // Highlights border red if invalid characters are present
+          border: lname && !/^[a-zA-Z\s]*$/.test(lname) ? "1px solid red" : "1px solid #ccc"
+      }}
+  />
+</div>
+
+{/* NEW: Immediate Red Warning Text */}
+{((fname && !/^[a-zA-Z\s]*$/.test(fname)) || (lname && !/^[a-zA-Z\s]*$/.test(lname))) && (
+    <div style={{ color: "red", fontSize: "11px", marginTop: "2px", textAlign: "left" }}>
+        ⚠️ Names must contain only letters (no numbers or symbols).
+    </div>
+)}
 
           {/* ROW 2: EMAIL */}
           <input type="email" placeholder="Email Address" onChange={(e) => setEmail(e.target.value)} required />

@@ -1,7 +1,8 @@
+import {createUserWithEmailAndPassword} from "firebase/auth";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { auth, db } from "./firebase";
 import { signOut } from "firebase/auth";
-import { collection, query, onSnapshot, doc, updateDoc, addDoc, deleteDoc, getDocs, where, orderBy } from "firebase/firestore";
+import { collection, query, onSnapshot, doc, updateDoc, addDoc, setDoc, deleteDoc, getDocs, where, orderBy } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png"; 
 
@@ -87,7 +88,7 @@ const StaffDashboard = () => {
   const [owners, setOwners] = useState([]); 
   const [allPets, setAllPets] = useState([]); 
   
-  const [apptSubTab, setApptSubTab] = useState("Pending");
+  const [apptSubTab, setApptSubTab] = useState("Approved");
 
   // Consultation Form State
   const [showConsultModal, setShowConsultModal] = useState(false);
@@ -113,6 +114,9 @@ const StaffDashboard = () => {
   const [chatInput, setChatInput] = useState("");
   const [allMessages, setAllMessages] = useState([]);
   const [editingMessageId, setEditingMessageId] = useState(null);
+  
+  // --- NEW: SENDING MESSAGE LOCK STATE ---
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
 
   // --- REPORT STATES ---
   const [reportStartDate, setReportStartDate] = useState("");
@@ -136,6 +140,18 @@ const StaffDashboard = () => {
       apptId: null, 
       reason: "" 
   });
+
+  // --- REGISTER OWNER MODAL STATES ---
+const [showRegisterModal, setShowRegisterModal] = useState(false);
+const [registerLoading, setRegisterLoading] = useState(false);
+const [registerError, setRegisterError] = useState("");
+const [registerData, setRegisterData] = useState({
+    firstName: "",
+    lastName: "",
+    email: "",
+    password: "",
+    confirmPassword: ""
+});
 
   // --- QUICK USAGE MODAL STATE ---
     const [usageModal, setUsageModal] = useState({ 
@@ -792,6 +808,65 @@ const handleSaveInventory = async (e) => {
       }
   };
 
+  const handleRegisterOwner = async (e) => {
+    e.preventDefault();
+    setRegisterError("");
+
+    // 1. Validation (Adapted from Signup.jsx)
+    const { firstName, lastName, email, password, confirmPassword } = registerData;
+    const nameRegex = /^[a-zA-Z\s]*$/;
+
+    if (!firstName || !lastName || !email || !password) {
+        return setRegisterError("Please fill in all fields.");
+    }
+    if (!nameRegex.test(firstName) || !nameRegex.test(lastName)) {
+        return setRegisterError("Names must contain only letters.");
+    }
+    if (password !== confirmPassword) {
+        return setRegisterError("Passwords do not match.");
+    }
+    if (password.length < 8) {
+        return setRegisterError("Password must be at least 8 characters.");
+    }
+
+    setRegisterLoading(true);
+
+    try {
+        // NOTE: In a real app, creating a user here might log out the Staff account.
+        // Ideally, use a secondary Firebase App instance or Cloud Function to create users without auth switching.
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const newUser = userCredential.user;
+
+        // 2. Save to Firestore (users collection)
+        await setDoc(doc(db, "users", newUser.uid), {
+            firstName: firstName,
+            lastName: lastName,
+            email: email,
+            role: "owner",
+            createdAt: new Date()
+        });
+
+        // 3. Auto-select this new owner for the Walk-In
+        setWalkInData({ ...walkInData, ownerId: newUser.uid });
+
+        showToast("New Owner Registered Successfully!");
+        
+        // 4. Reset and Close
+        setRegisterData({ firstName: "", lastName: "", email: "", password: "", confirmPassword: "" });
+        setShowRegisterModal(false);
+
+    } catch (err) {
+        console.error(err);
+        if (err.code === "auth/email-already-in-use") {
+            setRegisterError("Email is already registered.");
+        } else {
+            setRegisterError("Failed to register: " + err.message);
+        }
+    } finally {
+        setRegisterLoading(false);
+    }
+};
+
   // --- CALENDAR APP CLICK HANDLER ---
   const handleCalendarApptClick = (appt) => {
       setApptSubTab(appt.status);
@@ -823,7 +898,7 @@ const handleSaveInventory = async (e) => {
       const symptomsString = consultData.symptoms.join(", ");
 
       await updateDoc(doc(db, "appointments", selectedApptId), {
-          status: "Done",
+          status: "Approved", // Changed from "Done" to "Approved"
           date: consultData.date,
           reason: consultData.reason,
           symptoms: symptomsString, 
@@ -877,15 +952,24 @@ const handleSaveInventory = async (e) => {
       e.preventDefault();
       if(!chatInput.trim() || !selectedChatOwner) return;
 
-      if (editingMessageId) {
-          await updateDoc(doc(db, "messages", editingMessageId), { text: chatInput, isEdited: true });
-          setEditingMessageId(null);
-      } else {
-          await addDoc(collection(db, "messages"), { 
-              text: chatInput, senderId: auth.currentUser.uid, senderName: "Staff", receiverId: selectedChatOwner.id, createdAt: new Date(), participants: [auth.currentUser.uid, selectedChatOwner.id], type: "chat", read: false 
-          });
+      if (isSendingMessage) return; // Prevent multiple clicks
+      setIsSendingMessage(true);
+
+      try {
+        if (editingMessageId) {
+            await updateDoc(doc(db, "messages", editingMessageId), { text: chatInput, isEdited: true });
+            setEditingMessageId(null);
+        } else {
+            await addDoc(collection(db, "messages"), { 
+                text: chatInput, senderId: auth.currentUser.uid, senderName: "Staff", receiverId: selectedChatOwner.id, createdAt: new Date(), participants: [auth.currentUser.uid, selectedChatOwner.id], type: "chat", read: false 
+            });
+        }
+        setChatInput("");
+      } catch (error) {
+        console.error("Error sending message:", error);
+      } finally {
+        setIsSendingMessage(false);
       }
-      setChatInput("");
   };
 
   const handleLogout = () => { setConfirmModal ({ show: true, message: "Are you sure want to log out?", onConfirm: async () => {await signOut(auth); navigate("/");
@@ -1209,7 +1293,7 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                     ) : (
                         <div style={{display: "flex", flexDirection: "column", height: "100%", overflow: "hidden"}}>
                             <div style={{ display: "flex", gap: "10px", marginBottom: "15px", overflowX: "auto", paddingBottom: "5px", flexShrink: 0 }}>
-                                {["Pending", "Approved", "Done", "Cancelled"].map(status => (
+                                {["Approved", "Pending", "Done", "Cancelled"].map(status => (
                                     <button key={status} onClick={() => setApptSubTab(status)} style={{ padding: "8px 15px", border: "1px solid #ddd", borderRadius: "20px", background: apptSubTab === status ? "#2196F3" : "white", color: apptSubTab === status ? "white" : "#333", cursor: "pointer", transition: "all 0.2s" }}>{status}</button>
                                 ))}
                             </div>
@@ -1412,7 +1496,9 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
                                 <form onSubmit={handleSendMessage} style={{ padding: "15px", borderTop: "1px solid #eee", display: "flex", gap: "10px" }}>
                                     <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." style={{ flex: 1, padding: "10px", borderRadius: "20px", border: "1px solid #ddd" }} />
                                     {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{background:"#999", color:"white", border:"none", padding:"0 15px", borderRadius:"20px", cursor:"pointer"}}>Cancel</button>}
-                                    <button type="submit" style={{ background: "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>{editingMessageId ? "Update" : "Send"}</button>
+                                    <button type="submit" disabled={isSendingMessage} style={{ background: isSendingMessage ? "#ccc" : "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "20px", cursor: isSendingMessage ? "not-allowed" : "pointer", fontWeight: "bold" }}>
+                                        {isSendingMessage ? "Sending..." : (editingMessageId ? "Update" : "Send")}
+                                    </button>
                                 </form>
                             </>
                         ) : (
@@ -1636,38 +1722,134 @@ const handleMarkAllRead = async () => { const currentIds = notificationList.map(
 
       {/* --- MODALS --- */}
       {/* 1. Walk In Modal */}
-      {showWalkInModal && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%"}}>
-                  <h3 style={{marginTop:0}}>New Walk-In Appointment</h3>
-                  <form onSubmit={handleCreateWalkIn} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
-                      <select required value={walkInData.ownerId} onChange={e => setWalkInData({...walkInData, ownerId: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                          <option value="">Select Owner</option>
-                          {owners.map(o => <option key={o.id} value={o.id}>{o.firstName} {o.lastName}</option>)}
-                      </select>
-                      {walkInData.ownerId && (
-                           <select required value={walkInData.petId} onChange={e => {
-                               const pet = allPets.find(p => p.id === e.target.value);
-                               setWalkInData({...walkInData, petId: e.target.value, petName: pet?.name || ""});
-                           }} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                              <option value="">Select Pet</option>
-                              {allPets.filter(p => p.ownerId === walkInData.ownerId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                           </select>
-                      )}
-                      <input type="date" required value={walkInData.date} onChange={e => setWalkInData({...walkInData, date: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                      <input type="time" required value={walkInData.time} onChange={e => setWalkInData({...walkInData, time: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                      <select required value={walkInData.reason} onChange={e => setWalkInData({...walkInData, reason: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                          <option value="">Select Reason</option>
-                          {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
-                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                          <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Book</button>
-                          <button type="button" onClick={() => setShowWalkInModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                      </div>
-                  </form>
-              </div>
-          </div>
-      )}
+{showWalkInModal && (
+    <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+        <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%"}}>
+            <h3 style={{marginTop:0}}>New Walk-In Appointment</h3>
+            <form onSubmit={handleCreateWalkIn} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
+                
+                {/* --- UPDATED OWNER SELECTION --- */}
+                <div style={{ display: "flex", gap: "10px" }}>
+                    <select required value={walkInData.ownerId} onChange={e => setWalkInData({...walkInData, ownerId: e.target.value})} 
+                        style={{flex: 1, padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                        <option value="">Select Owner</option>
+                        {owners.map(o => <option key={o.id} value={o.id}>{o.firstName} {o.lastName}</option>)}
+                    </select>
+                    <button type="button" onClick={() => setShowRegisterModal(true)} 
+                        style={{ background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", padding: "0 15px", cursor: "pointer", fontSize: "13px" }}>
+                        + New
+                    </button>
+                </div>
+
+                {walkInData.ownerId && (
+                    <select required value={walkInData.petId} onChange={e => {
+                        const pet = allPets.find(p => p.id === e.target.value);
+                        setWalkInData({...walkInData, petId: e.target.value, petName: pet?.name || ""});
+                    }} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                        <option value="">Select Pet</option>
+                        {allPets.filter(p => p.ownerId === walkInData.ownerId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                )}
+                <input type="date" required value={walkInData.date} onChange={e => setWalkInData({...walkInData, date: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                <input type="time" required value={walkInData.time} onChange={e => setWalkInData({...walkInData, time: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
+                <select required value={walkInData.reason} onChange={e => setWalkInData({...walkInData, reason: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
+                    <option value="">Select Reason</option>
+                    {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
+                    <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Book</button>
+                    <button type="button" onClick={() => setShowWalkInModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+)}
+
+      {/* --- REGISTER NEW OWNER MODAL (Nested or Standalone) --- */}
+{showRegisterModal && (
+    <div style={{
+        position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+        backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", 
+        alignItems: "center", zIndex: 3200 // Higher z-index than WalkIn modal
+    }}>
+        <div style={{
+            background: "white", padding: "25px", borderRadius: "12px", 
+            width: "400px", maxWidth: "90%", boxShadow: "0 4px 15px rgba(0,0,0,0.2)"
+        }}>
+            <h3 style={{ marginTop: 0, color: "#1976D2" }}>Register New Owner</h3>
+            
+            {registerError && (
+                <div style={{ 
+                    background: "#ffebee", color: "#d32f2f", padding: "10px", 
+                    borderRadius: "6px", fontSize: "13px", marginBottom: "15px" 
+                }}>
+                    {registerError}
+                </div>
+            )}
+
+            <form onSubmit={handleRegisterOwner} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div style={{ display: "flex", gap: "10px" }}>
+                    <input 
+                        type="text" placeholder="First Name" required
+                        value={registerData.firstName}
+                        onChange={(e) => setRegisterData({...registerData, firstName: e.target.value})}
+                        style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
+                    />
+                    <input 
+                        type="text" placeholder="Last Name" required
+                        value={registerData.lastName}
+                        onChange={(e) => setRegisterData({...registerData, lastName: e.target.value})}
+                        style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
+                    />
+                </div>
+
+                <input 
+                    type="email" placeholder="Email Address" required
+                    value={registerData.email}
+                    onChange={(e) => setRegisterData({...registerData, email: e.target.value})}
+                    style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" }}
+                />
+
+                <input 
+                    type="password" placeholder="Password (Min 8 chars)" required
+                    value={registerData.password}
+                    onChange={(e) => setRegisterData({...registerData, password: e.target.value})}
+                    style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" }}
+                />
+                
+                <input 
+                    type="password" placeholder="Confirm Password" required
+                    value={registerData.confirmPassword}
+                    onChange={(e) => setRegisterData({...registerData, confirmPassword: e.target.value})}
+                    style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" }}
+                />
+
+                <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                    <button 
+                        type="submit" 
+                        disabled={registerLoading}
+                        style={{ 
+                            flex: 1, background: "#4CAF50", color: "white", padding: "10px", 
+                            border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" 
+                        }}
+                    >
+                        {registerLoading ? "Registering..." : "Create Account"}
+                    </button>
+                    <button 
+                        type="button" 
+                        onClick={() => setShowRegisterModal(false)}
+                        style={{ 
+                            flex: 1, background: "#ccc", color: "#333", padding: "10px", 
+                            border: "none", borderRadius: "6px", cursor: "pointer" 
+                        }}
+                    >
+                        Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+)}
 
       {/* 2. Consultation Modal */}
       {showConsultModal && (

@@ -6,7 +6,6 @@ import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png";
 import EditPetModal from "./EditPetModal";
 
-
 // --- CONSTANTS ---
 const DOG_BREEDS = [
   "Aspin (Asong Pinoy)", "Beagle", "Bulldog", "Chihuahua", "Dachshund", 
@@ -26,6 +25,14 @@ const getTimeInMinutes = (timeStr) => {
     const [hours, minutes] = timeStr.split(':').map(Number);
     return (hours * 60) + minutes;
 };
+
+// --- HELPER: REQUIREMENT ITEM (For Password) ---
+const RequirementItem = ({ fulfilled, text }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", color: fulfilled ? "#4CAF50" : "#999" }}>
+        <span style={{ fontSize: "12px" }}>{fulfilled ? "✔" : "○"}</span>
+        <span>{text}</span>
+    </div>
+);
 
 // --- TOAST COMPONENT ---
 const Toast = ({ message, type, onClose }) => {
@@ -51,7 +58,7 @@ const OwnerDashboard = () => {
   const scrollRef = useRef();
 
   const [activeTab, setActiveTab] = useState("pets");
-  const [apptFilter, setApptFilter] = useState("Pending")
+  const [apptFilter, setApptFilter] = useState("Approved")
   const [requestEditPet, setRequestEditPet] = useState(null);;
 
   // --- MOBILE SUB-TAB STATES ---
@@ -125,6 +132,11 @@ const OwnerDashboard = () => {
   const [profileData, setProfileData] = useState({ firstName: "", lastName: "", email: "", phone: "", address: "" });
   const [newPassword, setNewPassword] = useState(""); 
   
+  // --- PASSWORD VALIDATION STATE ---
+  const [passwordValidations, setPasswordValidations] = useState({
+    hasLower: false, hasUpper: false, hasNumber: false, hasSymbol: false, hasLength: false
+  });
+
   // --- PET FORM DATA ---
   const [petName, setPetName] = useState("");
   const [species, setSpecies] = useState("Dog");
@@ -143,6 +155,17 @@ const OwnerDashboard = () => {
   // --- COMBINE NOTIFICATIONS ---
   const allNotifications = [...localReminders, ...serverNotifications];
   const unreadCount = allNotifications.filter(n => !n.isSeenByOwner).length;
+
+  // --- CHECK PASSWORD VALIDITY ON CHANGE ---
+  useEffect(() => {
+    setPasswordValidations({
+      hasLower: /[a-z]/.test(newPassword),
+      hasUpper: /[A-Z]/.test(newPassword),
+      hasNumber: /\d/.test(newPassword),
+      hasSymbol: /[!@#$%^&*(),.?":{}|<>]/.test(newPassword),
+      hasLength: newPassword.length >= 8
+    });
+  }, [newPassword]);
 
   // --- CHECK FOR UPCOMING APPOINTMENTS (1 HOUR REMINDER) ---
   useEffect(() => {
@@ -272,11 +295,10 @@ const OwnerDashboard = () => {
       return appt.status === apptFilter;
   });
 
-  const medicalRecords = myAppointments.filter(appt => {
-      const isDone = appt.status === 'Done';
-      const isPetMatch = recordFilterPetId === 'all' || appt.petId === recordFilterPetId;
-      return isDone && isPetMatch;
-  });
+const medicalRecords = myAppointments.filter(appt => 
+    appt.diagnosis && appt.diagnosis !== "" && 
+    (recordFilterPetId === 'all' || appt.petId === recordFilterPetId)
+);
 
   const handleToggleNotifications = () => {
       setShowNotifDropdown(!showNotifDropdown);
@@ -459,8 +481,26 @@ const OwnerDashboard = () => {
 
   const handleSaveProfile = async (e) => {
       e.preventDefault();
+
+      // --- 1. NAME VALIDATION (Only Letters & Spaces) ---
+      const nameRegex = /^[a-zA-Z\s]+$/;
+      if (!nameRegex.test(profileData.firstName) || !nameRegex.test(profileData.lastName)) {
+          showToast("Names must contain only letters (no numbers or symbols).", "error");
+          return;
+      }
+
+      // --- 2. PASSWORD VALIDATION (If Changed) ---
+      if (newPassword.trim()) {
+          const { hasLower, hasUpper, hasNumber, hasSymbol, hasLength } = passwordValidations;
+          if (!hasLower || !hasUpper || !hasNumber || !hasSymbol || !hasLength) {
+              showToast("Password does not meet the security requirements.", "error");
+              return;
+          }
+      }
+
       if (isSaving) return;
       setIsSaving(true);
+      
       try {
         const userRef = doc(db, "users", user.uid);
         await updateDoc(userRef, { 
@@ -603,49 +643,58 @@ const OwnerDashboard = () => {
       e.preventDefault(); 
       if(!chatInput.trim()) return; 
 
-      if (editingMessageId) {
-          await updateDoc(doc(db, "messages", editingMessageId), { text: chatInput, isEdited: true });
-          setEditingMessageId(null);
-          setChatInput("");
-          return;
-      }
+      if (isSaving) return; // Prevent multiple sends
+      setIsSaving(true);
 
-      let shouldAutoReply = false;
-      const now = new Date();
-      
-      if (chatMessages.length === 0) {
-          shouldAutoReply = true;
-      } else {
-          const lastMsg = chatMessages[chatMessages.length - 1];
-          const lastTime = lastMsg.createdAt?.toDate ? lastMsg.createdAt.toDate() : new Date(lastMsg.createdAt);
-          const diffMs = now - lastTime;
-          const twoHoursMs = 2 * 60 * 60 * 1000;
-          
-          if (diffMs >= twoHoursMs) {
-              shouldAutoReply = true;
-          }
-      }
+      try {
+        if (editingMessageId) {
+            await updateDoc(doc(db, "messages", editingMessageId), { text: chatInput, isEdited: true });
+            setEditingMessageId(null);
+            setChatInput("");
+            return;
+        }
 
-      await addDoc(collection(db, "messages"), { 
-          text: chatInput, senderId: user.uid, senderName: "Owner", receiverId: "STAFF_global", createdAt: now, participants: [user.uid], type: "chat", read: false 
-      }); 
-      
-      if (shouldAutoReply) {
-          setTimeout(async () => {
-              await addDoc(collection(db, "messages"), {
-                  text: "Thank you for contacting us! Our staff has been notified and will reply shortly.",
-                  senderId: "STAFF_global",
-                  senderName: "System",
-                  receiverId: user.uid,
-                  createdAt: new Date(),
-                  participants: [user.uid],
-                  type: "chat",
-                  read: false
-              });
-          }, 1000);
-      }
+        let shouldAutoReply = false;
+        const now = new Date();
+        
+        if (chatMessages.length === 0) {
+            shouldAutoReply = true;
+        } else {
+            const lastMsg = chatMessages[chatMessages.length - 1];
+            const lastTime = lastMsg.createdAt?.toDate ? lastMsg.createdAt.toDate() : new Date(lastMsg.createdAt);
+            const diffMs = now - lastTime;
+            const twoHoursMs = 2 * 60 * 60 * 1000;
+            
+            if (diffMs >= twoHoursMs) {
+                shouldAutoReply = true;
+            }
+        }
 
-      setChatInput(""); 
+        await addDoc(collection(db, "messages"), { 
+            text: chatInput, senderId: user.uid, senderName: "Owner", receiverId: "STAFF_global", createdAt: now, participants: [user.uid], type: "chat", read: false 
+        }); 
+        
+        if (shouldAutoReply) {
+            setTimeout(async () => {
+                await addDoc(collection(db, "messages"), {
+                    text: "Thank you for contacting us! Our staff has been notified and will reply shortly.",
+                    senderId: "STAFF_global",
+                    senderName: "System",
+                    receiverId: user.uid,
+                    createdAt: new Date(),
+                    participants: [user.uid],
+                    type: "chat",
+                    read: false
+                });
+            }, 1000);
+        }
+
+        setChatInput(""); 
+      } catch (error) {
+        console.error("Error sending message:", error);
+      } finally {
+        setIsSaving(false);
+      }
   };
 
   const handleLogout = () => { setConfirmModal({show: true, message: "Are you sure you want to log out?", onConfirm: async () => {await signOut(auth); navigate("/");}
@@ -788,7 +837,20 @@ const OwnerDashboard = () => {
                         </div>
                         <div style={{ gridColumn: "1 / -1", background:"#e3f2fd", padding:"20px", borderRadius:"8px", border:"1px solid #bbdefb" }}>
                             <label style={{ fontSize: "14px", fontWeight: "bold", color:"#1565C0" }}>Change Password (Optional)</label>
-                            <input type="password" placeholder="Enter new password to update..." value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{width:"100%", padding:"12px", marginTop:"8px", border:"1px solid #90caf9", borderRadius:"8px", background:"white"}} />
+                            <input type="password" placeholder="Enter new password to update..." value={newPassword} onChange={(e) => setNewPassword(e.target.value)} style={{width:"100%", padding:"12px", marginTop:"8px", marginBottom:"10px", border:"1px solid #90caf9", borderRadius:"8px", background:"white"}} />
+                            
+                            {/* COMPACT CHECKLIST */}
+                            <div style={{ background: "#f9f9f9", padding: "8px 12px", borderRadius: "6px", border: "1px solid #eee" }}>
+                                <p style={{ margin: "0 0 5px", fontSize: "12px", fontWeight: "bold", color: "#555", textAlign: "left" }}>Password Requirements:</p>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "2px 8px" }}>
+                                    <RequirementItem fulfilled={passwordValidations.hasLower} text="Lowercase" />
+                                    <RequirementItem fulfilled={passwordValidations.hasUpper} text="Uppercase" />
+                                    <RequirementItem fulfilled={passwordValidations.hasNumber} text="Number" />
+                                    <RequirementItem fulfilled={passwordValidations.hasSymbol} text="Symbol" />
+                                    <RequirementItem fulfilled={passwordValidations.hasLength} text="8+ Chars" />
+                                </div>
+                            </div>
+                            
                             <div style={{fontSize:"12px", color:"#555", marginTop:"5px"}}>Leave blank if you don't want to change it.</div>
                         </div>
                         <div style={{ gridColumn: "1 / -1", marginTop: "10px" }}>
@@ -945,7 +1007,7 @@ const OwnerDashboard = () => {
                         {(!isMobile || apptSubTab === "list") && (
                             <div className="card" style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "20px", boxSizing: "border-box" }}>
                                 <div style={{display: "flex", gap: "10px", marginBottom: "15px", overflowX: "auto", paddingBottom: "5px", borderBottom: "1px solid #eee"}}>
-                                    {["Pending", "Approved", "Done", "Cancelled"].map(filter => (
+                                    {["Approved", "Pending", "Cancelled"].map(filter => (
                                         <button key={filter} onClick={() => setApptFilter(filter)} style={{padding: "8px 16px", borderRadius: "20px", border: "none", cursor: "pointer", background: apptFilter === filter ? "#2196F3" : "#f1f1f1", color: apptFilter === filter ? "white" : "#555", fontWeight: "bold", fontSize: "13px", whiteSpace: "nowrap"}}>
                                             {filter}
                                         </button>
@@ -1028,7 +1090,9 @@ const OwnerDashboard = () => {
                     <form onSubmit={handleSendMessage} style={{padding: "15px", borderTop: "1px solid #eee", background: "white", display: "flex", gap: "10px"}}>
                         <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type your message..." style={{flex: 1, padding: "12px", borderRadius: "25px", border: "1px solid #ddd", fontSize: "14px", outline: "none"}} />
                         {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{background: "#999", color: "white", border: "none", padding: "0 20px", borderRadius: "25px", cursor: "pointer"}}>Cancel</button>}
-                        <button type="submit" style={{background: "#2196F3", color: "white", border: "none", padding: "0 25px", borderRadius: "25px", fontWeight: "bold", cursor: "pointer"}}>Send</button>
+                        <button type="submit" disabled={isSaving} style={{background: isSaving ? "#ccc" : "#2196F3", color: "white", border: "none", padding: "0 25px", borderRadius: "25px", fontWeight: "bold", cursor: isSaving ? "not-allowed" : "pointer"}}>
+                            {isSaving ? "Sending..." : "Send"}
+                        </button>
                     </form>
                 </div>
             )}
