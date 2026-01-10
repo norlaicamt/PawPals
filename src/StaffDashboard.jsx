@@ -76,8 +76,9 @@ const StaffDashboard = () => {
 
     // --- Notification States ---
     const [showNotifications, setShowNotifications] = useState(false);
-    const [readNotifIds, setReadNotifIds] = useState([]);
-
+    const [setReadNotifIds] = useState([]);
+    const [adminNotifs] = useState([]);
+    
     // Toast State
     const [toast, setToast] = useState({ show: false, message: "", type: "success" });
 
@@ -108,24 +109,26 @@ const StaffDashboard = () => {
     const [selectedApptId, setSelectedApptId] = useState(null);
 
     const [consultData, setConsultData] = useState({
-        date: "",
-        reason: [],
-        symptoms: [],
-        otherSymptom: "",
-        diagnosis: "",
-        otherDiagnosis: "",
-        medicineId: "",
-        medicineName: "",
-        otherMedicine: "", // Manual input
-        notes: "",
-        followUp: "",
-        dispenseItem: true // <--- NEW: Defaults to true (Deduct Stock)
-    });
+    date: new Date().toISOString().split('T')[0],
+    reason: [],
+    symptoms: [],
+    otherSymptom: "",
+    diagnosis: "",
+    otherDiagnosis: "",
+    notes: "",
+    followUp: "",
+    // --- MULTIPLE MEDICINE STATES ---
+    prescriptionList: [], 
+    tempItemId: "",      // Stores dropdown selection
+    tempQty: 1,          // Stores quantity for the selected item
+    tempDispense: true   // Stores deduction toggle for the selected item
+});
 
     // Records / Pet List State
     const [petSearch, setPetSearch] = useState("");
     const [petFilterType, setPetFilterType] = useState("All");
     const [viewingPet, setViewingPet] = useState(null);
+    const [petRecords, setPetRecords] = useState([]);
 
     // Chat States
     const [selectedChatOwner, setSelectedChatOwner] = useState(null);
@@ -718,6 +721,7 @@ const StaffDashboard = () => {
 
             await addDoc(collection(db, "edit_requests"), {
                 type: "inventory",
+                action: "add",
                 itemId: editingInventoryId || null, // null if it's a new item request
                 itemName: inventoryData.name,
                 originalData: originalData,
@@ -834,6 +838,7 @@ const StaffDashboard = () => {
         setSelectedApptId(apptId);
         const appt = appointments.find(a => a.id === apptId);
         const scheduledDate = normalizeDate(appt.date);
+
         const existingSymptoms = appt.symptoms ? appt.symptoms.split(", ") : [];
 
         setConsultData({
@@ -843,111 +848,135 @@ const StaffDashboard = () => {
             diagnosis: appt.diagnosis || "",
             medicine: appt.medicine || "",
             notes: appt.notes || "",
-            followUp: ""
+            followUp: "",
+            prescriptionList: [], 
+            tempItemId: "",
+            tempQty: 1,
+            tempDispense: true,
         });
         setShowConsultModal(true);
     };
 
+    const addItemToPrescription = () => {
+    if (!consultData.tempItemId) return showToast("Select an item first.", "error");
+    
+    const item = inventory.find(i => i.id === consultData.tempItemId);
+    const isOther = consultData.tempItemId === "Other";
+
+    const newItem = {
+        id: consultData.tempItemId,
+        name: isOther ? consultData.otherMedicine : item.name,
+        qty: consultData.tempQty,
+        dispense: isOther ? false : consultData.tempDispense,
+        unit: item?.unit || "unit(s)"
+    };
+
+    setConsultData(prev => ({
+        ...prev,
+        prescriptionList: [...prev.prescriptionList, newItem],
+        tempItemId: "",
+        tempQty: 1,
+        otherMedicine: ""
+    }));
+};
+
     // --- RE-ADDED MISSING FUNCTION WRAPPER HERE ---
     const handleFinishConsultation = async (e) => {
-        e.preventDefault();
+    e.preventDefault();
 
-        // 1. Validation for Symptoms
-        if (consultData.symptoms.length === 0) {
-            return showToast("Please select at least one symptom.", "error");
-        }
-        if (consultData.symptoms.includes("Other") && !consultData.otherSymptom.trim()) {
-            return showToast("Please specify the other symptoms.", "error");
-        }
+    // 1. Validations
+    if (consultData.prescriptionList.length === 0) {
+        return showToast("Please add at least one treatment/medicine to the list.", "error");
+    }
+    if (!consultData.diagnosis) return showToast("Please select a diagnosis.", "error");
 
-        // 2. Validation for Diagnosis
-        if (!consultData.diagnosis) {
-            return showToast("Please select a diagnosis.", "error");
-        }
-        if (consultData.diagnosis === "Other" && !consultData.otherDiagnosis.trim()) {
-            return showToast("Please specify the diagnosis.", "error");
-        }
+    const apptDoc = appointments.find(a => a.id === selectedApptId);
+    setRegisterLoading(true);
 
-        // 3. Validation for Medicine
-        if (!consultData.medicineId) {
-            return showToast("Please select a treatment or 'Other'.", "error");
-        }
-        if (consultData.medicineId === "Other" && !consultData.otherMedicine?.trim()) {
-            return showToast("Please specify the treatment/medicine details.", "error");
-        }
+    try {
+        // 2. Loop & Deduct Inventory Stock
+        for (const item of consultData.prescriptionList) {
+            if (item.id !== "Other" && item.dispense) {
+                const invItem = inventory.find(i => i.id === item.id);
+                if (invItem) {
+                    const itemRef = doc(db, "inventory", item.id);
+                    await updateDoc(itemRef, {
+                        quantity: Number(invItem.quantity) - item.qty,
+                        lastUpdated: new Date()
+                    });
 
-        // Prepare Final Strings
-        const finalSymptoms = consultData.symptoms.includes("Other")
-            ? [...consultData.symptoms.filter(s => s !== "Other"), `Other: ${consultData.otherSymptom.trim()}`]
-            : consultData.symptoms;
-
-        const finalDiagnosis = consultData.diagnosis === "Other"
-            ? `Other: ${consultData.otherDiagnosis.trim()}`
-            : consultData.diagnosis;
-
-        const finalMedicineName = consultData.medicineId === "Other"
-            ? consultData.otherMedicine.trim()
-            : consultData.medicineName;
-
-        setRegisterLoading(true);
-
-        try {
-            // --- MODIFIED STOCK LOGIC ---
-            if (consultData.medicineId && consultData.medicineId !== "Other" && consultData.dispenseItem) {
-                const itemRef = doc(db, "inventory", consultData.medicineId);
-                const item = inventory.find(i => i.id === consultData.medicineId);
-
-                if (!item || item.quantity < 1) {
-                    setRegisterLoading(false);
-                    return showToast("Medicine selected is out of stock.", "error");
+                    await addDoc(collection(db, "inventoryLogs"), {
+                        itemId: item.id,
+                        itemName: item.name,
+                        change: -item.qty,
+                        reason: `Dispensed: Appt ${selectedApptId}`,
+                        timestamp: new Date()
+                    });
                 }
-
-                await updateDoc(itemRef, {
-                    quantity: Number(item.quantity) - 1,
-                    lastUpdated: new Date()
-                });
-
-                await addDoc(collection(db, "inventoryLogs"), {
-                    itemId: consultData.medicineId,
-                    itemName: item.name,
-                    change: -1,
-                    reason: `Dispensed during Consultation (Appt: ${selectedApptId})`,
-                    timestamp: new Date()
-                });
             }
-
-            // 5. Update Appointment Record
-            await updateDoc(doc(db, "appointments", selectedApptId), {
-                status: "Approved",
-                isCompleted: true,
-                consultationDate: consultData.date,
-                symptoms: finalSymptoms.join(", "),
-                diagnosis: finalDiagnosis,
-                medicine: finalMedicineName,
-                notes: consultData.notes,
-                followUpDate: consultData.followUp,
-                staffId: auth.currentUser.uid,
-                completedAt: new Date()
-            });
-
-            showToast("Consultation Completed!", "success");
-            setShowConsultModal(false);
-
-            setConsultData({
-                date: new Date().toISOString().split('T')[0],
-                reason: "", symptoms: [], otherSymptom: "",
-                diagnosis: "", otherDiagnosis: "",
-                medicineId: "", medicineName: "", otherMedicine: "",
-                notes: "", followUp: "", dispenseItem: true
-            });
-
-        } catch (err) {
-            console.error("Consultation Error:", err);
-            showToast("Error: " + err.message, "error");
-        } finally {
-            setRegisterLoading(false);
         }
-    };
+
+        // 3. Create Permanent Medical Record
+        const treatmentSummary = consultData.prescriptionList
+            .map(p => `${p.name} (x${p.qty})`).join(", ");
+
+        await addDoc(collection(db, "medical_records"), {
+            apptId: selectedApptId,
+            petId: apptDoc.petId,
+            petName: apptDoc.petName,
+            ownerId: apptDoc.ownerId,
+            date: consultData.date,
+            diagnosis: consultData.diagnosis === "Other" ? consultData.otherDiagnosis : consultData.diagnosis,
+            treatment: treatmentSummary,
+            prescriptionDetails: consultData.prescriptionList,
+            notes: consultData.notes,
+            staffId: auth.currentUser.uid,
+            createdAt: new Date()
+        });
+
+        // 4. Update Appointment
+        await updateDoc(doc(db, "appointments", selectedApptId), {
+            status: "Approved",
+            isCompleted: true,
+            completedAt: new Date()
+        });
+
+        showToast("Consultation Saved Successfully!", "success");
+        setShowConsultModal(false);
+        // Reset state here...
+
+    } catch (err) {
+        console.error(err);
+        showToast("Error: " + err.message, "error");
+    } finally {
+        setRegisterLoading(false);
+    }
+};
+
+// --- NEW: FETCH MEDICAL RECORDS WHEN VIEWING A PET ---
+    useEffect(() => {
+        if (!viewingPet) {
+            setPetRecords([]); // Clear records if no pet is selected
+            return;
+        }
+
+        // Query the 'medical_records' collection for this specific pet
+        const q = query(
+            collection(db, "medical_records"),
+            where("petId", "==", viewingPet.id),
+            orderBy("date", "desc")
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const records = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setPetRecords(records);
+        });
+
+        return () => unsubscribe();
+    }, [viewingPet]);
 
     const handleStartEdit = (msg) => { setEditingMessageId(msg.id); setChatInput(msg.text); };
     const handleCancelEdit = () => { setEditingMessageId(null); setChatInput(""); };
@@ -1136,51 +1165,39 @@ const StaffDashboard = () => {
     };
 
     const getNotifications = () => {
-        let notifs = [];
+    let notifs = [];
 
-        // Filter out appointments that are already marked as read in DB
-        appointments.filter(a => a.status === 'Pending' && !a.read).forEach(a => {
-            notifs.push({
-                id: a.id,
-                type: 'appointment',
-                subType: 'Pending',
-                text: `New Request: ${a.petName} (${a.date})`,
-                date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(),
-                linkTab: 'appointments',
-                linkSubTab: 'Pending'
-            });
+    // Admin Inventory Approvals
+    adminNotifs.forEach(n => {
+        notifs.push({
+            id: n.id,
+            type: 'admin',
+            text: `Admin ${n.status}: ${n.itemName}`,
+            date: n.updatedAt?.toDate() || new Date(),
+            linkTab: 'inventory'
         });
+    });
 
-        // Filter out cancelled apps that are read
-        appointments.filter(a => a.status === 'Cancelled' && !a.read).slice(0, 5).forEach(a => {
-            notifs.push({
-                id: a.id,
-                type: 'appointment',
-                subType: 'Cancelled',
-                text: `Cancelled: ${a.petName}`,
-                date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(),
-                linkTab: 'appointments',
-                linkSubTab: 'Cancelled'
-            });
+    // New Pending Appointments
+    appointments.filter(a => a.status === 'Pending').forEach(a => {
+        notifs.push({
+            id: a.id,
+            type: 'appointment',
+            text: `New Request Appointment: ${a.petName}`,
+            date: a.createdAt?.toDate() || new Date(),
+            linkTab: 'appointments'
         });
+    });
 
-        // Messages
-        const unreadMsgs = allMessages.filter(m => m.senderId !== auth.currentUser.uid && !m.read && m.senderId !== "AI_BOT");
-        const unreadOwners = [...new Set(unreadMsgs.map(m => m.senderId))];
+    // Messages
+    const unreadMsgs = allMessages.filter(m => m.senderId !== auth.currentUser.uid && !m.read);
+    const unreadOwners = [...new Set(unreadMsgs.map(m => m.senderId))];
+    unreadOwners.forEach(id => {
+        notifs.push({ id, type: 'message', text: `Message from Client`, linkTab: 'messages' });
+    });
 
-        unreadOwners.forEach(ownerId => {
-            const owner = owners.find(o => o.id === ownerId);
-            notifs.push({
-                id: `msg-${ownerId}`,
-                type: 'message',
-                text: `Msg from ${owner ? owner.firstName : 'Client'}`,
-                date: new Date(),
-                linkTab: 'messages',
-                ownerData: owner
-            });
-        });
-        return notifs.sort((a, b) => b.date - a.date).filter(n => !readNotifIds.includes(n.id));
-    };
+    return notifs.sort((a, b) => b.date - a.date);
+};
 
     const notificationList = getNotifications();
     const unreadCount = notificationList.length;
@@ -1443,83 +1460,126 @@ const StaffDashboard = () => {
 
                             <div style={{ flex: 1, overflowY: "auto" }}>
                                 {viewingPet ? (
-                                    <div>
-                                        <button onClick={() => setViewingPet(null)} style={{ marginBottom: "15", padding: "5px 10px", cursor: "pointer", border: "1px solid #ccc", borderRadius: "4px", background: "white", fontSize: "12px" }}>← Back to List</button>
-                                        <div style={{ background: "#f9f9f9", padding: "20px", borderRadius: "8px", border: "1px solid #ddd" }}>
-                                            <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
-                                            <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
-                                            <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
-                                            <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
+            /* --- FIXED: Removed nested duplicate block here --- */
+            <div>
+            <button 
+                onClick={() => setViewingPet(null)} 
+                style={{ marginBottom: "15px", padding: "5px 10px", cursor: "pointer", border: "1px solid #ccc", borderRadius: "4px", background: "white", fontSize: "12px" }}
+            >
+                ← Back to List
+            </button>
+            
+            <div style={{ background: "#f9f9f9", padding: "20px", borderRadius: "8px", border: "1px solid #ddd" }}>
+                <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
+                <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
+                <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
+                <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
 
-                                            <h4 style={{ marginTop: "10px", borderBottom: "1px solid #ccc", paddingBottom: "5px", fontSize: "16px", color: "#1c65a1ff" }}>Medical History</h4>
-                                            {appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").length === 0 ? <p style={{ color: "#888" }}>No history yet.</p> : (
-                                                appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").map(hist => (
-                                                    <div key={hist.id} style={{ background: "white", padding: "10px", borderRadius: "6px", marginBottom: "10px", border: "1px solid #eee" }}>
-                                                        <div style={{ fontWeight: "bold", color: "#2196F3" }}>{hist.date} - {hist.reason}</div>
-                                                        <div style={{ fontSize: "14px", marginTop: "5px" }}><strong>Diagnosis:</strong> {hist.diagnosis}</div>
-                                                        <div style={{ fontSize: "14px" }}><strong>Treatment:</strong> {hist.medicine}</div>
-                                                        {hist.notes && <div style={{ fontSize: "13px", color: "#555", marginTop: "5px", fontStyle: "italic" }}>"{hist.notes}"</div>}
-                                                    </div>
-                                                ))
-                                            )}
-                                        </div>
-                                    </div>
-                                ) : (
-                                    <table style={{ width: "100%", borderCollapse: "collapse", background: "white" }}>
-                                        <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 5, boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
-                                            <tr style={{ textAlign: "left", color: "#555" }}>
-                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet Name</th>
-                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Species / Breed</th>
-                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Owner</th>
-                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Contact</th>
-                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Action</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {filteredRecords.length === 0 ? (
-                                                <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#888" }}>No pets found matching filters.</td></tr>
-                                            ) : (
-                                                filteredRecords.map(pet => {
-                                                    const owner = owners.find(o => o.id === pet.ownerId);
-                                                    return (
-                                                        <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                                            <td style={{ padding: "12px", fontWeight: "bold", fontSize: "15px" }}>{pet.name}</td>
-                                                            <td style={{ padding: "12px" }}>
-                                                                {pet.species === "Cat" ? "🐱" : pet.species === "Dog" ? "🐶" : "🐾"} {pet.species}
-                                                                <br /><span style={{ fontSize: "12px", color: "#888" }}>{pet.breed}</span>
-                                                            </td>
-                                                            <td style={{ padding: "12px" }}>
-                                                                {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown Owner"}
-                                                            </td>
-                                                            <td style={{ padding: "12px", color: "#555" }}>
-                                                                {owner?.phone || owner?.phoneNumber || <span style={{ color: "#ccc" }}>N/A</span>}
-                                                            </td>
-                                                            <td style={{ padding: "12px" }}>
-                                                                <button
-                                                                    onClick={() => setViewingPet(pet)}
-                                                                    style={{
-                                                                        background: "#e3f2fd",
-                                                                        color: "#1565C0",
-                                                                        border: "none",
-                                                                        padding: "6px 12px",
-                                                                        borderRadius: "4px",
-                                                                        cursor: "pointer",
-                                                                        fontWeight: "bold",
-                                                                        fontSize: "13px"
-                                                                    }}
-                                                                >
-                                                                    View
-                                                                </button>
-                                                            </td>
-                                                        </tr>
-                                                    );
-                                                })
-                                            )}
-                                        </tbody>
-                                    </table>
-                                )}
-                            </div>
-                        </div>
+                <hr style={{ margin: "20px 0", border: "0", borderTop: "1px solid #ddd" }} />
+
+                <h3 style={{ color: "#1976D2", marginBottom: "15px" }}>🩺 Medical History</h3>
+
+                {/* Uses the 'petRecords' state we added earlier */}
+                {petRecords.length === 0 ? (
+                    <div style={{ padding: "20px", background: "#f9f9f9", borderRadius: "8px", textAlign: "center", color: "#888", border: "1px dashed #ccc" }}>
+                        No medical records found for this pet.
+                    </div>
+                ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", background: "white", fontSize: "13px", boxShadow: "0 1px 3px rgba(0,0,0,0.1)" }}>
+                        <thead>
+                            <tr style={{ background: "#2196F3", color: "white", textAlign: "left" }}>
+                                <th style={{ padding: "12px 10px", borderRadius: "6px 0 0 0" }}>Date</th>
+                                <th style={{ padding: "12px 10px" }}>Diagnosis</th>
+                                <th style={{ padding: "12px 10px" }}>Treatment / Meds</th>
+                                <th style={{ padding: "12px 10px" }}>Notes</th>
+                                <th style={{ padding: "12px 10px", borderRadius: "0 6px 0 0" }}>Vet</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {petRecords.map((record, idx) => (
+                                <tr key={record.id || idx} style={{ borderBottom: "1px solid #eee", background: idx % 2 === 0 ? "white" : "#f9f9f9" }}>
+                                    <td style={{ padding: "12px 10px", verticalAlign: "top" }}><strong>{record.date}</strong></td>
+                                    <td style={{ padding: "12px 10px", verticalAlign: "top", color: "#d32f2f", fontWeight: "500" }}>{record.diagnosis}</td>
+                                    
+                                    {/* Displays List of Medicines properly */}
+                                    <td style={{ padding: "12px 10px", verticalAlign: "top" }}>
+                                        {record.prescriptionList && record.prescriptionList.length > 0 ? (
+                                            <ul style={{ margin: 0, paddingLeft: "15px", listStyleType: "circle" }}>
+                                                {record.prescriptionList.map((med, i) => (
+                                                    <li key={i}>{med.name} <span style={{color:"#777", fontSize:"11px"}}>(x{med.qty})</span></li>
+                                                ))}
+                                            </ul>
+                                        ) : (
+                                            <span>{record.medicineName || record.treatment || "-"}</span>
+                                        )}
+                                    </td>
+                                    
+                                    <td style={{ padding: "12px 10px", verticalAlign: "top", color: "#555", fontStyle: "italic" }}>"{record.notes || "No notes"}"</td>
+                                    <td style={{ padding: "12px 10px", verticalAlign: "top" }}>{record.vetName || "Staff"}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+            </div>
+        </div>
+    ) : (
+        /* --- PET LIST TABLE --- */
+        <table style={{ width: "100%", borderCollapse: "collapse", background: "white" }}>
+            <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 5, boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                <tr style={{ textAlign: "left", color: "#555" }}>
+                    <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet Name</th>
+                    <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Species / Breed</th>
+                    <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Owner</th>
+                    <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Contact</th>
+                    <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {filteredRecords.length === 0 ? (
+                    <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#888" }}>No pets found matching filters.</td></tr>
+                ) : (
+                    filteredRecords.map(pet => {
+                        const owner = owners.find(o => o.id === pet.ownerId);
+                        return (
+                            <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                                <td style={{ padding: "12px", fontWeight: "bold", fontSize: "15px" }}>{pet.name}</td>
+                                <td style={{ padding: "12px" }}>
+                                    {pet.species === "Cat" ? "🐱" : pet.species === "Dog" ? "🐶" : "🐾"} {pet.species}
+                                    <br /><span style={{ fontSize: "12px", color: "#888" }}>{pet.breed}</span>
+                                </td>
+                                <td style={{ padding: "12px" }}>
+                                    {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown Owner"}
+                                </td>
+                                <td style={{ padding: "12px", color: "#555" }}>
+                                    {owner?.phone || owner?.phoneNumber || <span style={{ color: "#ccc" }}>N/A</span>}
+                                </td>
+                                <td style={{ padding: "12px" }}>
+                                    <button
+                                        onClick={() => setViewingPet(pet)}
+                                        style={{
+                                            background: "#e3f2fd",
+                                            color: "#1565C0",
+                                            border: "none",
+                                            padding: "6px 12px",
+                                            borderRadius: "4px",
+                                            cursor: "pointer",
+                                            fontWeight: "bold",
+                                            fontSize: "13px"
+                                        }}
+                                    >
+                                        View
+                                    </button>
+                                </td>
+                            </tr>
+                        );
+                    })
+                )}
+            </tbody>
+        </table>
+    )}
+</div>
+                    </div>
                     )}
 
                     {/* --- MESSAGES TAB --- */}
@@ -2070,81 +2130,113 @@ const StaffDashboard = () => {
                             </label>
 
                             {/* TREATMENT/MEDICINE SECTION */}
-                            <label><strong>Treatment / Medicine (Inventory):</strong><br />
-                                <select
-                                    required
-                                    value={consultData.medicineId}
-                                    onChange={(e) => {
-                                        const val = e.target.value;
-                                        const item = inventory.find(i => i.id === val);
-                                        setConsultData({
-                                            ...consultData,
-                                            medicineId: val,
-                                            medicineName: item ? item.name : (val === "Other" ? "" : "None"),
-                                            dispenseItem: true // Reset to true when changing item
-                                        });
-                                    }}
-                                    style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }}
-                                >
-                                    <option value="">Select Item or Treatment</option>
-                                    {/* Real Inventory Items */}
-                                    {inventory.filter(i => i.quantity > 0).map(item => (
-                                        <option key={item.id} value={item.id}>{item.name} ({item.quantity} available)</option>
-                                    ))}
-                                    {/* Manual Input Option */}
-                                    <option value="Other">Other / Not in Inventory</option>
-                                </select>
+<div style={{ border: "1px solid #ddd", padding: "10px", borderRadius: "8px", marginTop: "10px", marginBottom: "15px" }}>
+    <label style={{ fontWeight: "bold", fontSize: "14px" }}>Add Treatments/Medicines</label>
+    
+    {/* Input Row */}
+    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px", alignItems: "center" }}>
+        <select 
+            style={{ flex: 2, minWidth: "200px", padding: "8px" }}
+            value={consultData.tempItemId}
+            onChange={(e) => setConsultData({
+                ...consultData, 
+                tempItemId: e.target.value,
+                tempDispense: true // Default to true when picking a new item
+            })}
+        >
+            <option value="">-- Select Item --</option>
+            {inventory.filter(i => i.quantity > 0).map(item => (
+                <option key={item.id} value={item.id}>
+                    {item.name} ({item.quantity} left)
+                </option>
+            ))}
+            <option value="Other">Other / Not in Inventory</option>
+        </select>
 
-                                {/* --- NEW: DISPENSE CHECKBOX --- */}
-                                {/* Only show this checkbox if a specific Inventory Item is selected (not "Other") */}
-                                {consultData.medicineId && consultData.medicineId !== "Other" && (
-                                    <div style={{ marginTop: "8px", background: "#f9f9f9", padding: "8px", borderRadius: "6px", border: "1px solid #eee" }}>
-                                        <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "500", color: "#333" }}>
-                                            <input
-                                                type="checkbox"
-                                                checked={consultData.dispenseItem}
-                                                onChange={(e) => setConsultData({ ...consultData, dispenseItem: e.target.checked })}
-                                                style={{ width: "16px", height: "16px", accentColor: "#4CAF50" }}
-                                            />
-                                            Dispense & Deduct Stock
-                                        </label>
-                                        <div style={{ fontSize: "11px", color: "#666", marginLeft: "24px", marginTop: "2px" }}>
-                                            {consultData.dispenseItem
-                                                ? "Item count will be reduced by 1."
-                                                : "Prescription will be recorded, but stock will NOT be deducted."}
-                                        </div>
-                                    </div>
-                                )}
+        <input 
+            type="number" 
+            min="1" 
+            placeholder="Qty"
+            style={{ width: "60px", padding: "8px" }}
+            value={consultData.tempQty}
+            onChange={(e) => setConsultData({...consultData, tempQty: parseInt(e.target.value) || 1})}
+        />
+        
+        <button 
+            type="button" 
+            onClick={addItemToPrescription} 
+            style={{ background: "#4CAF50", color: "white", border: "none", padding: "8px 15px", borderRadius: "4px", cursor: "pointer" }}
+        >
+            Add
+        </button>
+    </div>
 
-                                {/* SPECIFY BOX: Only appears if "Other" is selected in the dropdown */}
-                                {consultData.medicineId === "Other" && (
-                                    <textarea
-                                        placeholder="List treatment or medicine not in inventory..."
-                                        required
-                                        rows="2"
-                                        value={consultData.otherMedicine}
-                                        onChange={e => setConsultData({ ...consultData, otherMedicine: e.target.value })}
-                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
-                                    />
-                                )}
-                            </label>
+    {/* Dispense Checkbox (Only if inventory item is selected) */}
+    {consultData.tempItemId && consultData.tempItemId !== "Other" && (
+        <div style={{ marginTop: "8px", background: "#f9f9f9", padding: "5px 10px", borderRadius: "4px", fontSize: "12px", display: "inline-block" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", color: "#333" }}>
+                <input 
+                    type="checkbox" 
+                    checked={consultData.tempDispense}
+                    onChange={(e) => setConsultData({ ...consultData, tempDispense: e.target.checked })}
+                />
+                Dispense & Deduct Stock
+            </label>
+        </div>
+    )}
 
-                            <label><strong>Notes:</strong><br />
-                                <textarea value={consultData.notes} onChange={e => setConsultData({ ...consultData, notes: e.target.value })} rows="2" style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} placeholder="Additional observations..." />
-                            </label>
+    {/* 'Other' Specification Box */}
+    {consultData.tempItemId === "Other" && (
+        <textarea
+            placeholder="Specify treatment name..."
+            required
+            rows="1"
+            value={consultData.otherMedicine || ""}
+            onChange={e => setConsultData({ ...consultData, otherMedicine: e.target.value })}
+            style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
+        />
+    )}
 
-                            <label style={{ background: "#e3f2fd", padding: "10px", borderRadius: "6px" }}>
-                                <strong>Schedule Follow-up (Optional):</strong><br />
-                                <input type="date" value={consultData.followUp} onChange={e => setConsultData({ ...consultData, followUp: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #bbb" }} />
-                            </label>
+    {/* The List of Added Items */}
+    <div style={{ marginTop: "10px" }}>
+        {consultData.prescriptionList.length === 0 && (
+            <p style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>No items added yet.</p>
+        )}
+        {consultData.prescriptionList.map((item, index) => (
+            <div key={index} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "13px", padding: "6px 0", borderBottom: "1px solid #eee" }}>
+                <div>
+                    <strong>{item.name}</strong> <span style={{color:"#666"}}>x{item.qty}</span>
+                    {item.dispense && <span style={{ marginLeft: "8px", fontSize: "11px", color: "green", background: "#e8f5e9", padding: "2px 6px", borderRadius: "4px" }}>Deducting Stock</span>}
+                </div>
+                <button 
+                    type="button"
+                    onClick={() => setConsultData({
+                        ...consultData, 
+                        prescriptionList: consultData.prescriptionList.filter((_, i) => i !== index)
+                    })}
+                    style={{ color: "#d32f2f", border: "none", background: "none", cursor: "pointer", fontWeight: "bold", fontSize: "14px" }}
+                >✕</button>
+            </div>
+        ))}
+    </div>
+</div>
 
-                            <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-                                <button type="submit" disabled={registerLoading}
-                                    style={{ flex: 1, background: registerLoading ? "#ccc" : "#4CAF50", color: "white", border: "none", padding: "12px", borderRadius: "6px", cursor: registerLoading ? "not-allowed" : "pointer", fontWeight: "bold" }}>
-                                    {registerLoading ? "Updating Stock..." : "Finish Consultation"}
-                                </button>
-                                <button type="button" onClick={() => setShowConsultModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "12px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
-                            </div>
+<label><strong>Notes:</strong><br />
+    <textarea value={consultData.notes} onChange={e => setConsultData({ ...consultData, notes: e.target.value })} rows="2" style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} placeholder="Additional observations..." />
+</label>
+
+<label style={{ background: "#e3f2fd", padding: "10px", borderRadius: "6px", marginTop: "10px", display: "block" }}>
+    <strong>Schedule Follow-up (Optional):</strong><br />
+    <input type="date" value={consultData.followUp} onChange={e => setConsultData({ ...consultData, followUp: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #bbb" }} />
+</label>
+
+<div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+    <button type="submit" disabled={registerLoading}
+        style={{ flex: 1, background: registerLoading ? "#ccc" : "#4CAF50", color: "white", border: "none", padding: "12px", borderRadius: "6px", cursor: registerLoading ? "not-allowed" : "pointer", fontWeight: "bold" }}>
+        {registerLoading ? "Updating Stock..." : "Finish Consultation"}
+    </button>
+    <button type="button" onClick={() => setShowConsultModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "12px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+</div>
                         </form>
                     </div>
                 </div>

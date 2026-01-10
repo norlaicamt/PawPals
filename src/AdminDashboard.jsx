@@ -1,10 +1,10 @@
-// src/AdminDashboard.jsx
 import { useEffect, useState } from "react";
 import { auth, db } from "./firebase";
 import { signOut } from "firebase/auth";
-import { collection, onSnapshot, doc, query, orderBy, updateDoc, deleteDoc, getDoc } from "firebase/firestore"; 
+import { collection, onSnapshot, doc, query, orderBy, updateDoc, deleteDoc, addDoc, getDoc } from "firebase/firestore"; 
 import { useNavigate } from "react-router-dom";
 import logoImg from "./assets/logo.png"; 
+import emailjs from '@emailjs/browser';
 
 // --- PROFESSIONAL SVG BAR CHART COMPONENT WITH LEGEND ---
 const SimpleBarChart = ({ data, title, hideLabels = false }) => {
@@ -91,6 +91,7 @@ const AdminDashboard = () => {
   const [archivedPets, setArchivedPets] = useState([]);
   const [requests, setRequests] = useState([]); 
   const [reactivationRequests, setReactivationRequests] = useState([]);
+  const [medicalRecords, setMedicalRecords] = useState([]);
 
   // --- UI STATES ---
   const [activeView, setActiveView] = useState("overview"); 
@@ -114,7 +115,8 @@ const AdminDashboard = () => {
   // PRINT STATES
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [selectedPetsForPrint, setSelectedPetsForPrint] = useState([]);
-  const [isPrintingAppointments, setIsPrintingAppointments] = useState(false);
+  // 'appointments', 'pets_list', 'history_single'
+  const [printType, setPrintType] = useState("pets_list"); 
 
   // CHART MODAL STATE
   const [showChartModal, setShowChartModal] = useState(false);
@@ -123,6 +125,8 @@ const AdminDashboard = () => {
   const [modal, setModal] = useState({
       show: false, title: "", message: "", type: "confirm", inputValue: "", onConfirm: null 
   });
+  
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // --- DATA FETCHING ---
   useEffect(() => {
@@ -130,15 +134,12 @@ const AdminDashboard = () => {
     
     const unsubPets = onSnapshot(collection(db, "pets"), (snap) => {
         const allPets = snap.docs.map(d => ({...d.data(), id: d.id}));
-        // Active: Not archived, not pending deletion
         setPets(allPets.filter(p => !p.isArchived && p.deletionStatus !== "Pending"));
-        // Archive: Archived OR Pending Deletion
         setArchivedPets(allPets.filter(p => p.isArchived || p.deletionStatus === "Pending"));
     });
 
     const unsubAppts = onSnapshot(query(collection(db, "appointments"), orderBy("date", "desc")), (snap) => setAppointments(snap.docs.map(d => ({...d.data(), id: d.id}))));
     
-    // FETCH ALL EDIT REQUESTS (Includes standard edits AND pet_restore requests)
     const unsubRequests = onSnapshot(collection(db, "edit_requests"), (snap) => {
       setRequests(snap.docs.map(d => ({ ...d.data(), id: d.id })));
     });
@@ -147,13 +148,16 @@ const AdminDashboard = () => {
         setReactivationRequests(snap.docs.map(d => ({ ...d.data(), id: d.id })));
     });
 
-    return () => { unsubUsers(); unsubPets(); unsubAppts(); unsubRequests(); unsubReactivation(); };
+    // --- FIX: Correct Collection Name "medical_records" ---
+    const unsubRecords = onSnapshot(collection(db, "medical_records"), (snap) => {
+        setMedicalRecords(snap.docs.map(d => ({ ...d.data(), id: d.id })));
+    });
+
+    return () => { unsubUsers(); unsubPets(); unsubAppts(); unsubRequests(); unsubReactivation(); unsubRecords(); };
   }, []);
 
   // --- FILTER REQUESTS ---
-  // 1. Restore Requests: Owners asking to reactivate an archived pet (type = 'pet_restore')
   const restoreRequests = requests.filter(r => r.type === 'pet_restore');
-  // 2. General Requests: Standard inventory/pet detail edits (type != 'pet_restore')
   const generalRequests = requests.filter(r => r.type !== 'pet_restore');
 
   const stats = {
@@ -164,8 +168,10 @@ const AdminDashboard = () => {
     completedAppointments: appointments.filter(a => a.status === "Done").length
   };
 
-  // --- HELPER: CUSTOM MODAL HANDLERS ---
-  const closeModal = () => setModal({ ...modal, show: false, inputValue: "" });
+  const closeModal = () => {
+      setModal({ ...modal, show: false, inputValue: "" });
+      setIsProcessing(false);
+  };
   
   const confirmAction = (title, message, action) => { 
       setModal({ show: true, title, message, type: "confirm", onConfirm: action, inputValue: "" }); 
@@ -179,8 +185,6 @@ const AdminDashboard = () => {
       setModal({ show: true, title, message, type: "input", onConfirm: action, inputValue: "" });
   };
 
-  // --- ACTION LOGIC ---
-
   const handleLogout = () => { 
       confirmAction("Logout", "Are you sure you want to log out?", async () => { 
           await signOut(auth); 
@@ -190,42 +194,63 @@ const AdminDashboard = () => {
   };
 
   const handleToggleUserStatus = (user) => {
-      const isDisabling = !user.isDisabled; 
-      if (isDisabling) {
-          inputAction("Disable Account", "Please provide a reason. This will be sent to the owner.", async (reason) => {
-            if(!reason || reason.trim() === "") {
-                showAlert("Error", "Reason is required.");
-                return;
-            }
-            await updateDoc(doc(db, "users", user.id), { isDisabled: true, disableReason: reason });
-            closeModal();
-            showAlert("Success", `Account disabled.`);
-          });
-      } else {
-          const request = reactivationRequests.find(req => req.email === user.email);
-          let message = "Enable this account?";
-          if (request) {
-              message = `User requested reactivation.\nReason: "${request.reason}"\n\nApprove and Enable?`;
-          }
+    const isDisabling = !user.isDisabled; 
+    
+    if (!isDisabling) {
+        // --- REACTIVATING / ENABLING ---
+        confirmAction("Enable Account", "Enable this account and notify owner?", async () => {
+            try {
+                // 1. Update user status in Firestore
+                await updateDoc(doc(db, "users", user.id), { 
+                    isDisabled: false, 
+                    disableReason: null 
+                });
 
-          confirmAction("Enable Account", message, async () => {
-              try {
-                  await updateDoc(doc(db, "users", user.id), { isDisabled: false, disableReason: null });
-                  if (request && request.id) {
-                      await deleteDoc(doc(db, "reactivation_requests", request.id));
-                  }
-                  closeModal();
-                  showAlert("Success", "Account Reactivated Successfully.");
-              } catch (err) {
-                  console.error(err);
-                  showAlert("Error", "Could not enable account.");
-              }
-          });
-      }
-  };
+                // 2. Prepare Email Parameters
+                const templateParams = {
+                    to_email: user.email,
+                    to_name: user.firstName,
+                    login_url: "https://pawpals-bfacb.web.app" // Your live URL
+                };
+
+                // 3. Send Email via EmailJS
+                // Replace 'YOUR_SERVICE_ID', 'YOUR_TEMPLATE_ID', and 'YOUR_PUBLIC_KEY' 
+                // with your actual IDs from the EmailJS dashboard.
+                await emailjs.send(
+                    'service_2glnwym', 
+                    'template_zcrc0nj', 
+                    templateParams, 
+                    'ORmxWraQvhedoUHOe'
+                );
+
+                closeModal();
+                showAlert("Success", "Account Reactivated and Email Sent!");
+            } catch (err) {
+                console.error("Failed to reactivate:", err);
+                showAlert("Error", "Action failed. Please check your connection.");
+            }
+        });
+    } else {
+        // --- DISABLING (Logic for your existing disable button) ---
+        inputAction("Disable Account", "Enter reason for disabling:", async (reason) => {
+            if(!reason) return;
+            try {
+                await updateDoc(doc(db, "users", user.id), { 
+                    isDisabled: true, 
+                    disableReason: reason 
+                });
+                closeModal();
+                showAlert("Success", "Account Disabled.");
+            } catch (err) {
+                console.error(err);
+                showAlert("Error", "Could not disable account.");
+            }
+        });
+    }
+};
 
   const handleManualArchive = (id) => { 
-      inputAction("Archive Pet", "Please enter a reason for archiving this pet. The owner will be notified.", async (reason) => {
+      inputAction("Archive Pet", "Please enter a reason for archiving this pet.", async (reason) => {
           if(!reason) return; 
           await updateDoc(doc(db, "pets", id), { 
               isArchived: true,
@@ -263,20 +288,16 @@ const AdminDashboard = () => {
       });
   };
 
-  // --- REACTIVATION HANDLERS (New) ---
   const handleApproveReactivation = (req) => {
-    confirmAction("Approve Reactivation", "Approve request and restore this pet to the active list?", async () => {
+    confirmAction("Approve Reactivation", "Approve request and restore this pet?", async () => {
         try {
-            // Restore pet, remove archive flags
-            // ADDED: reactivationAlert: true -> Ensures owner gets a notification even if offline
             await updateDoc(doc(db, "pets", req.petId), { 
                 isArchived: false, 
                 archiveReason: null,
                 deletionStatus: null, 
-                deletionReason: null,
+                deletionReason: null, 
                 reactivationAlert: true 
             });
-            // Delete request
             await deleteDoc(doc(db, "edit_requests", req.id));
             closeModal();
             showAlert("Success", "Pet restored to active list!");
@@ -288,34 +309,38 @@ const AdminDashboard = () => {
   };
 
   const handleRejectReactivation = (reqId) => {
-    confirmAction("Reject Reactivation", "Reject this reactivation request? The pet will remain archived.", async () => {
+    confirmAction("Reject Reactivation", "Reject this reactivation request?", async () => {
         await deleteDoc(doc(db, "edit_requests", reqId));
         closeModal();
         showAlert("Rejected", "Request removed. Pet remains archived.");
     });
   };
 
-  // --- GENERAL EDIT REQUEST HANDLERS ---
   const handleApproveRequest = async (req) => {
     confirmAction("Approve Update", "Approve these changes?", async () => {
         try {
             const collectionName = req.type === 'inventory' ? 'inventory' : 'pets';
-            const itemRef = doc(db, collectionName, req.itemId || req.petId);
-            const itemSnap = await getDoc(itemRef);
-            if (!itemSnap.exists()) {
-                closeModal();
-                showAlert("Error", "Item/Pet no longer exists.");
-                await deleteDoc(doc(db, "edit_requests", req.id));
-                return;
+            const isAddOperation = req.action === 'add' || (!req.itemId && !req.petId);
+
+            if (isAddOperation) {
+                await addDoc(collection(db, collectionName), req.newData);
+            } else {
+                const itemRef = doc(db, collectionName, req.itemId || req.petId);
+                const itemSnap = await getDoc(itemRef);
+                if (!itemSnap.exists()) {
+                    closeModal();
+                    showAlert("Error", "Item/Pet no longer exists.");
+                    return;
+                }
+                await updateDoc(itemRef, req.newData);
             }
-            await updateDoc(itemRef, req.newData);
             await deleteDoc(doc(db, "edit_requests", req.id));
             closeModal();
-            showAlert("Success", "Record updated successfully.");
+            showAlert("Success", "Update processed successfully.");
         } catch (error) {
             console.error(error);
             closeModal();
-            showAlert("Error", "Failed to update.");
+            showAlert("Error", "Failed to process request: " + error.message);
         }
     });
 };
@@ -328,7 +353,7 @@ const handleRejectRequest = async (reqId) => {
     });
 };
 
-  // --- PRINT & FILTERS ---
+  // --- PRINT FUNCTIONS ---
   const togglePetSelection = (petId) => {
       setSelectedPetsForPrint(prev => prev.includes(petId) ? prev.filter(id => id !== petId) : [...prev, petId]);
   };
@@ -338,20 +363,30 @@ const handleRejectRequest = async (reqId) => {
       setSelectedPetsForPrint(selectedPetsForPrint.length === currentPets.length ? [] : currentPets.map(p => p.id));
   };
 
-  const handlePrintButtonClick = () => {
-      if (recordTab === "pets") {
-          setIsPrintingAppointments(false);
-          setSelectedPetsForPrint([]); 
-          setShowPrintModal(true);
-      } else {
-          setIsPrintingAppointments(true);
-          setTimeout(() => { window.print(); }, 300);
-      }
+  const openPrintModal = () => {
+      // General print list modal
+      setPrintType("pets_list");
+      setSelectedPetsForPrint([]); 
+      setShowPrintModal(true);
+  };
+  
+  const handlePrintAppointments = () => {
+      setPrintType("appointments");
+      setTimeout(() => window.print(), 300);
   };
 
-  const executePrint = () => {
+  // --- NEW: Print Single Pet History Directly ---
+  const handlePrintSinglePetHistory = (pet) => {
+      // Set the viewing record as the one to print
+      setViewingRecord(pet);
+      setPrintType("history_single");
+      // Wait for state to update then print
+      setTimeout(() => window.print(), 500);
+  };
+
+  const executePrintList = () => {
       setShowPrintModal(false);
-      setTimeout(() => { window.print(); }, 500);
+      setTimeout(() => window.print(), 500);
   };
 
   const uniqueServices = [...new Set(appointments.map(a => a.reason).filter(Boolean))].sort();
@@ -455,19 +490,13 @@ const handleRejectRequest = async (reqId) => {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", flex: 1, minHeight: "350px" }}>
                     <div style={{background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", overflow: "hidden", position: "relative"}}>
                         <SimpleBarChart data={breedChartData} title="Pet Breed Distribution" hideLabels={true} />
-                        <button 
-                            onClick={() => setShowChartModal(true)}
-                            style={{ position: "absolute", bottom: "15px", right: "15px", padding: "8px 15px", background: "#2196F3", color: "white", border: "none", borderRadius: "20px", cursor: "pointer", fontWeight: "bold", fontSize: "12px", boxShadow: "0 2px 5px rgba(0,0,0,0.2)" }}
-                        >
-                            VIEW FULL CHART
-                        </button>
+                        <button onClick={() => setShowChartModal(true)} style={{ position: "absolute", bottom: "15px", right: "15px", padding: "8px 15px", background: "#2196F3", color: "white", border: "none", borderRadius: "20px", cursor: "pointer", fontWeight: "bold", fontSize: "12px", boxShadow: "0 2px 5px rgba(0,0,0,0.2)" }}>VIEW FULL CHART</button>
                     </div>
                     <div className="card" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", padding: "20px" }}>
                         <h4 style={{ margin: "0 0 15px 0", borderBottom: "1px solid #eee", paddingBottom: "10px", color: "#333" }}>System Quick Stats</h4>
                         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", padding: "15px", background: "#f9f9f9", borderRadius: "8px", border: "1px solid #eee" }}>
                                 <span>Pending Edit Requests</span>
-                                {/* Updated to show only general requests count */}
                                 <b style={{ color: generalRequests.length > 0 ? "orange" : "#333" }}>{generalRequests.length}</b>
                             </div>
                             <div style={{ display: "flex", justifyContent: "space-between", padding: "15px", background: "#f9f9f9", borderRadius: "8px", border: "1px solid #eee" }}>
@@ -537,6 +566,9 @@ const handleRejectRequest = async (reqId) => {
               <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
                   <h3 style={{ margin: 0 }}>Active Pets</h3>
+                  <button onClick={openPrintModal} style={{ background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer", marginLeft: "10px", fontSize: "12px", display: "flex", alignItems: "center", gap: "5px" }}>
+                    🖨️ Print List
+                  </button>
                   <select value={speciesFilter} onChange={(e) => setSpeciesFilter(e.target.value)} style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #ccc", marginLeft: "15px" }}>
                     <option value="All">All Species</option>
                     <option value="Dog">Dogs</option>
@@ -576,101 +608,114 @@ const handleRejectRequest = async (reqId) => {
           {/* --- RECORDS VIEW --- */}
           {activeView === "records" && (
             <div className="card no-print" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", height: "100%", display: "flex", flexDirection: "column" }}>
-              <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ display: "flex", gap: "10px" }}>
-                  <button onClick={() => setRecordTab("pets")} style={{ padding: "10px 20px", borderRadius: "20px", border: "none", background: recordTab === "pets" ? "#2196F3" : "#f5f5f5", color: recordTab === "pets" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Pet History</button>
-                  <button onClick={() => setRecordTab("appointments")} style={{ padding: "10px 20px", borderRadius: "20px", border: "none", background: recordTab === "appointments" ? "#2196F3" : "#f5f5f5", color: recordTab === "appointments" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Appointment History</button>
+                
+                {/* RECORDS HEADER */}
+                <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: "10px" }}>
+                        <button onClick={() => setRecordTab("pets")} style={{ padding: "10px 20px", borderRadius: "20px", border: "none", background: recordTab === "pets" ? "#2196F3" : "#f5f5f5", color: recordTab === "pets" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Pet History</button>
+                        <button onClick={() => setRecordTab("appointments")} style={{ padding: "10px 20px", borderRadius: "20px", border: "none", background: recordTab === "appointments" ? "#2196F3" : "#f5f5f5", color: recordTab === "appointments" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Appointments</button>
+                    </div>
+                    {recordTab === "pets" && (
+                        <input type="text" placeholder="Search pet for records..." value={recordPetSearch} onChange={(e) => setRecordPetSearch(e.target.value)} style={{ width: "250px", padding: "10px", border: "1px solid #ddd", borderRadius: "8px" }} />
+                    )}
                 </div>
-                <button onClick={handlePrintButtonClick} style={{ background: "#4CAF50", color: "white", padding: "10px 25px", border: "none", borderRadius: "8px", cursor: "pointer", fontWeight: "bold" }}>Print Report</button>
-              </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
+
+                {/* RECORDS CONTENT BODY */}
                 {recordTab === "pets" ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: "20px", height: "100%" }}>
-                    <div style={{ background: "#f9f9f9", borderRadius: "12px", display: "flex", flexDirection: "column", overflow: "hidden", border: "1px solid #eee" }}>
-                        <div style={{ padding: "15px", borderBottom: "1px solid #ddd" }}>
-                            <input type="text" placeholder="Search pet name..." value={recordPetSearch} onChange={(e) => setRecordPetSearch(e.target.value)} style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #ccc", boxSizing: "border-box" }} />
-                        </div>
-                        <div style={{ flex: 1, overflowY: "auto" }}>
+                    <div style={{ display: "flex", height: "100%" }}>
+                        {/* LEFT: PET LIST */}
+                        <div style={{ width: "300px", borderRight: "1px solid #eee", overflowY: "auto", background: "#fcfcfc" }}>
                             {sortedPetsForRecords.map(pet => (
                                 <div key={pet.id} onClick={() => setViewingRecord(pet)} style={{ padding: "15px", borderBottom: "1px solid #eee", cursor: "pointer", background: viewingRecord?.id === pet.id ? "#e3f2fd" : "transparent" }}>
                                     <div style={{ fontWeight: "bold", color: "#333" }}>{pet.name}</div>
-                                    <div style={{ fontSize: "12px", color: "#666" }}>Owner: {users.find(u => u.id === pet.ownerId)?.firstName}</div>
+                                    <div style={{ fontSize: "12px", color: "#666" }}>{pet.species} • {pet.breed}</div>
                                 </div>
                             ))}
                         </div>
-                    </div>
-                    <div style={{ background: "white", borderRadius: "12px", padding: "25px", border: "1px solid #eee", overflowY: "auto" }}>
-                        {viewingRecord ? (
-                            <div>
-                                <h2 style={{ margin: "0 0 5px 0", color: "#2196F3" }}>{viewingRecord.name}</h2>
-                                <p style={{ margin: "0 0 20px 0", color: "#666" }}>{viewingRecord.species} • {viewingRecord.breed}</p>
-                                <h3 style={{ borderBottom: "1px solid #eee", paddingBottom: "10px" }}>Medical History</h3>
-                                {appointments.filter(a => a.petId === viewingRecord.id && a.status === "Done").map(appt => (
-                                    <div key={appt.id} style={{ padding: "10px", borderBottom: "1px solid #f9f9f9" }}>
-                                        <b>{appt.date}</b> - {appt.reason} <span style={{color: "#888"}}>({appt.notes || "No notes"})</span>
+                        
+                        {/* RIGHT: PET DETAILS */}
+                        <div style={{ flex: 1, padding: "20px", overflowY: "auto" }}>
+                            {viewingRecord ? (
+                                <div style={{ background: "white", padding: "25px", borderRadius: "12px", border: "1px solid #eee" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "20px", borderBottom: "1px solid #eee", paddingBottom: "15px" }}>
+                                        <div>
+                                            <h2 style={{ margin: "0 0 5px 0", color: "#333" }}>{viewingRecord.name}</h2>
+                                            <span style={{ fontSize: "14px", color: "#666", background: "#f5f5f5", padding: "4px 10px", borderRadius: "15px" }}>{viewingRecord.species} • {viewingRecord.breed} • {viewingRecord.gender}</span>
+                                        </div>
+                                        {/* --- PRINT HISTORY BUTTON --- */}
+                                        <button onClick={() => handlePrintSinglePetHistory(viewingRecord)} style={{ height: "fit-content", background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: "5px" }}>
+                                            <span>🖨️</span> Print History
+                                        </button>
                                     </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div style={{ textAlign: "center", color: "#aaa", marginTop: "50px" }}>Select a pet to view history</div>
-                        )}
+                                    
+                                    {/* --- MEDICAL HISTORY TABLE (Staff Style) --- */}
+                                    <div style={{ overflowX: "auto" }}>
+                                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
+                                            <thead>
+                                                <tr style={{ background: "#f9f9f9", color: "#555", textAlign: "left" }}>
+                                                    <th style={{ padding: "12px 10px", borderBottom: "2px solid #eee", width: "120px" }}>Date</th>
+                                                    <th style={{ padding: "12px 10px", borderBottom: "2px solid #eee", width: "180px" }}>Diagnosis</th>
+                                                    <th style={{ padding: "12px 10px", borderBottom: "2px solid #eee" }}>Prescription / Treatment</th>
+                                                    <th style={{ padding: "12px 10px", borderBottom: "2px solid #eee" }}>Notes</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {medicalRecords
+                                                    .filter(r => r.petId === viewingRecord.id)
+                                                    .sort((a, b) => new Date(b.date) - new Date(a.date))
+                                                    .map(record => (
+                                                    <tr key={record.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                                                        <td style={{ padding: "15px 10px", verticalAlign: "top", color: "#333", fontWeight: "500" }}>{new Date(record.date).toLocaleDateString()}</td>
+                                                        <td style={{ padding: "15px 10px", verticalAlign: "top" }}><span style={{ background: "#e3f2fd", color: "#1565c0", padding: "3px 8px", borderRadius: "4px", fontSize: "13px", display: "inline-block" }}>{record.diagnosis || "Medical Visit"}</span></td>
+                                                        <td style={{ padding: "15px 10px", verticalAlign: "top" }}>
+                                                            {record.prescriptionDetails && record.prescriptionDetails.length > 0 ? (
+                                                                <ul style={{ margin: 0, paddingLeft: "15px", listStyleType: "circle", color: "#444" }}>
+                                                                    {record.prescriptionDetails.map((p, idx) => (
+                                                                        <li key={idx} style={{ marginBottom: "4px" }}>
+                                                                            <span style={{ fontWeight: "600" }}>{p.name}</span> <span style={{ color: "#777", fontSize: "13px" }}>— {p.qty} {p.unit}</span>
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                            ) : (record.prescriptionList && record.prescriptionList.length > 0) ? (
+                                                                <ul style={{ margin: 0, paddingLeft: "15px", listStyleType: "circle", color: "#444" }}>
+                                                                    {record.prescriptionList.map((p, idx) => (<li key={idx}>{p.name} — {p.qty} {p.unit}</li>))}
+                                                                </ul>
+                                                            ) : (<span style={{ color: "#888", fontStyle: "italic" }}>{record.treatment || record.prescription || "No prescription recorded."}</span>)}
+                                                        </td>
+                                                        <td style={{ padding: "15px 10px", verticalAlign: "top", color: "#666", fontSize: "13px", fontStyle: "italic" }}>{record.notes || "-"}</td>
+                                                    </tr>
+                                                ))}
+                                                {medicalRecords.filter(r => r.petId === viewingRecord.id).length === 0 && (
+                                                    <tr><td colSpan="4" style={{ textAlign: "center", padding: "30px", color: "#999" }}>No medical history found for this pet.</td></tr>
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            ) : (<div style={{ textAlign: "center", color: "#aaa", marginTop: "50px" }}>Select a pet to view history</div>)}
+                        </div>
                     </div>
-                  </div>
                 ) : (
-                  <div style={{ background: "white", borderRadius: "12px", border: "1px solid #eee" }}>
-                      
-                      {/* FILTER DROPDOWNS */}
-                      <div style={{ padding: "15px", borderBottom: "1px solid #eee", display: "flex", gap: "15px", background: "#f9f9f9", alignItems: "center" }}>
-                        <span style={{ fontSize: "14px", fontWeight: "bold", color: "#555" }}>Filter By:</span>
-                        <select value={recordStatus} onChange={(e) => setRecordStatus(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}>
-                            <option value="All">All Statuses</option>
-                            <option value="Pending">Pending</option>
-                            <option value="Confirmed">Confirmed</option>
-                            <option value="Done">Done</option>
-                            <option value="Cancelled">Cancelled</option>
-                        </select>
-
-                        <select value={recordServiceFilter} onChange={(e) => setRecordServiceFilter(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}>
-                            <option value="All">All Services</option>
-                            {uniqueServices.map(service => (
-                                <option key={service} value={service}>{service}</option>
-                            ))}
-                        </select>
-                      </div>
-
-                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                          <thead>
-                              <tr style={{ background: "#f5f5f5", textAlign: "left" }}>
-                                  <th style={{ padding: "12px" }}>Date</th>
-                                  <th style={{ padding: "12px" }}>Owner</th>
-                                  <th style={{ padding: "12px" }}>Pet</th>
-                                  <th style={{ padding: "12px" }}>Service</th>
-                                  <th style={{ padding: "12px" }}>Status</th>
-                              </tr>
-                          </thead>
-                          <tbody>
-                              {filteredAppointments.length === 0 ? (
-                                  <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#999" }}>No appointments found.</td></tr>
-                              ) : (
-                                  filteredAppointments.map(appt => (
-                                      <tr key={appt.id} style={{ borderBottom: "1px solid #eee" }}>
-                                          <td style={{ padding: "12px" }}>{appt.date}</td>
-                                          <td style={{ padding: "12px" }}>{users.find(u => u.id === appt.userId)?.firstName}</td>
-                                          <td style={{ padding: "12px" }}>{pets.find(p => p.id === appt.petId)?.name || "Unknown"}</td>
-                                          <td style={{ padding: "12px" }}>{appt.reason}</td>
-                                          <td style={{ padding: "12px" }}>
-                                            <span style={{ padding: "4px 8px", borderRadius: "4px", fontSize: "12px", background: appt.status === 'Done' ? '#e8f5e9' : appt.status === 'Pending' ? '#fff3e0' : '#eee', color: appt.status === 'Done' ? '#2e7d32' : appt.status === 'Pending' ? '#ef6c00' : '#666', fontWeight: "bold" }}>
-                                                {appt.status}
-                                            </span>
-                                          </td>
-                                      </tr>
-                                  ))
-                              )}
-                          </tbody>
-                      </table>
-                  </div>
+                    /* APPOINTMENTS TAB CONTENT */
+                    <div style={{ background: "white", borderRadius: "12px", border: "1px solid #eee", margin: "20px" }}>
+                        <div style={{ padding: "15px", borderBottom: "1px solid #eee", display: "flex", gap: "15px", background: "#f9f9f9", alignItems: "center" }}>
+                            <span style={{ fontSize: "14px", fontWeight: "bold", color: "#555" }}>Filter By:</span>
+                            <select value={recordStatus} onChange={(e) => setRecordStatus(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}><option value="All">All Statuses</option><option value="Pending">Pending</option><option value="Confirmed">Confirmed</option><option value="Done">Done</option><option value="Cancelled">Cancelled</option></select>
+                            <select value={recordServiceFilter} onChange={(e) => setRecordServiceFilter(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }}><option value="All">All Services</option>{uniqueServices.map(service => (<option key={service} value={service}>{service}</option>))}</select>
+                            <button onClick={handlePrintAppointments} style={{ marginLeft: "auto", background: "#607D8B", color: "white", padding: "8px 15px", borderRadius: "6px", border: "none", cursor: "pointer" }}>Print List</button>
+                        </div>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                            <thead><tr style={{ background: "#f5f5f5", textAlign: "left" }}><th style={{ padding: "12px" }}>Date</th><th style={{ padding: "12px" }}>Owner</th><th style={{ padding: "12px" }}>Pet</th><th style={{ padding: "12px" }}>Service</th><th style={{ padding: "12px" }}>Status</th></tr></thead>
+                            <tbody>
+                                {filteredAppointments.map(appt => (
+                                    <tr key={appt.id} style={{ borderBottom: "1px solid #eee" }}>
+                                        <td style={{ padding: "12px" }}>{appt.date}</td><td style={{ padding: "12px" }}>{users.find(u => u.id === appt.userId)?.firstName}</td><td style={{ padding: "12px" }}>{pets.find(p => p.id === appt.petId)?.name || "Unknown"}</td><td style={{ padding: "12px" }}>{appt.reason}</td><td style={{ padding: "12px" }}><span style={{ padding: "4px 8px", borderRadius: "4px", fontSize: "12px", background: appt.status === 'Done' ? '#e8f5e9' : appt.status === 'Pending' ? '#fff3e0' : '#eee', color: appt.status === 'Done' ? '#2e7d32' : appt.status === 'Pending' ? '#ef6c00' : '#666', fontWeight: "bold" }}>{appt.status}</span></td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 )}
-              </div>
             </div>
           )}
 
@@ -678,146 +723,55 @@ const handleRejectRequest = async (reqId) => {
           {activeView === "archive" && (
             <div className="card no-print" style={{ background: "white", borderRadius: "12px", boxShadow: "0 2px 8px rgba(0,0,0,0.06)", height: "100%", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "20px", borderBottom: "1px solid #eee", display: "flex", gap: "10px" }}>
-                    <button onClick={() => setArchiveTab("requests")} style={{ padding: "8px 20px", borderRadius: "20px", border: "none", background: archiveTab === "requests" ? "#2196F3" : "#f5f5f5", color: archiveTab === "requests" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>
-                        {/* Only show General requests count here */}
-                        Edit Requests {generalRequests.length > 0 && `(${generalRequests.length})`}
-                    </button>
-                    <button onClick={() => setArchiveTab("pets")} style={{ padding: "8px 20px", borderRadius: "20px", border: "none", background: archiveTab === "pets" ? "#2196F3" : "#f5f5f5", color: archiveTab === "pets" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>
-                        {/* Count pending deletions + pending restores */}
-                        Archived Pets {(stats.pendingDeletions + restoreRequests.length) > 0 && `(${stats.pendingDeletions + restoreRequests.length})`}
-                    </button>
+                    <button onClick={() => setArchiveTab("requests")} style={{ padding: "8px 20px", borderRadius: "20px", border: "none", background: archiveTab === "requests" ? "#2196F3" : "#f5f5f5", color: archiveTab === "requests" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Edit Requests {generalRequests.length > 0 && `(${generalRequests.length})`}</button>
+                    <button onClick={() => setArchiveTab("pets")} style={{ padding: "8px 20px", borderRadius: "20px", border: "none", background: archiveTab === "pets" ? "#2196F3" : "#f5f5f5", color: archiveTab === "pets" ? "white" : "#666", cursor: "pointer", fontWeight: "bold" }}>Archived Pets {(stats.pendingDeletions + restoreRequests.length) > 0 && `(${stats.pendingDeletions + restoreRequests.length})`}</button>
               </div>
 
               <div style={{ flex: 1, overflowY: "auto" }}>
-                
-                {/* 6. EDIT REQUESTS TABLE (NOW FILTERS OUT PET RESTORE REQUESTS) */}
                 {archiveTab === "requests" && (
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                        <thead style={{ position: "sticky", top: 0, background: "white" }}>
-                            <tr style={{ textAlign: "left", color: "#666", borderBottom: "2px solid #eee" }}>
-                                <th style={{ padding: "15px" }}>Type & Name</th>
-                                <th style={{ padding: "15px" }}>Requested Changes</th>
-                                <th style={{ padding: "15px" }}>Reason for Edit</th>
-                                <th style={{ padding: "15px" }}>Actions</th>
-                            </tr>
-                        </thead>
+                        <thead style={{ position: "sticky", top: 0, background: "white" }}><tr style={{ textAlign: "left", color: "#666", borderBottom: "2px solid #eee" }}><th style={{ padding: "15px" }}>Type & Name</th><th style={{ padding: "15px" }}>Requested Changes</th><th style={{ padding: "15px" }}>Reason</th><th style={{ padding: "15px" }}>Actions</th></tr></thead>
                         <tbody>
-                            {generalRequests.length === 0 ? (
-                                <tr><td colSpan="4" style={{ textAlign: "center", padding: "20px", color: "#999" }}>No pending general requests.</td></tr>
-                            ) : (
-                                generalRequests.map((req) => (
-                                    <tr key={req.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                        <td style={{ padding: "15px", verticalAlign: "top" }}>
-                                            <span style={{ 
-                                                fontSize: "10px", padding: "2px 6px", borderRadius: "4px", fontWeight: "bold",
-                                                background: req.type === 'inventory' ? '#e3f2fd' : '#f3e5f5',
-                                                color: req.type === 'inventory' ? '#1976d2' : '#7b1fa2',
-                                                display: "inline-block", marginBottom: "5px"
-                                            }}>
-                                                {req.type === 'inventory' ? 'INVENTORY' : 'PET'}
-                                            </span>
-                                            {/* Show ItemName if inventory, PetName if pet */}
-                                            <div style={{ fontWeight: "bold" }}>{req.itemName || req.petName}</div>
-                                        </td>
-                                        <td style={{ padding: "15px", verticalAlign: "top" }}>
-                                            <div style={{ background: "#f9f9f9", padding: "10px", borderRadius: "8px", fontSize: "13px" }}>
-                                                {Object.entries(req.newData || {}).map(([key, val]) => {
-                                                    const originalVal = req.originalData?.[key];
-                                                    if (String(originalVal) !== String(val)) {
-                                                        return (
-                                                            <div key={key} style={{ marginBottom: "4px" }}>
-                                                                <strong style={{ textTransform: "capitalize" }}>{key}:</strong>{" "}
-                                                                <span style={{ color: "red", textDecoration: "line-through" }}>{originalVal}</span>
-                                                                {" → "}
-                                                                <span style={{ color: "green", fontWeight: "bold" }}>{val}</span>
-                                                            </div>
-                                                        );
-                                                    }
-                                                    return null;
-                                                })}
-                                            </div>
-                                        </td>
-                                        <td style={{ padding: "15px", verticalAlign: "top", fontStyle: "italic", color: "#555" }}>
-                                            "{req.reason || "No reason provided"}"
-                                        </td>
-                                        <td style={{ padding: "15px", verticalAlign: "top" }}>
-                                            <div style={{ display: "flex", gap: "10px" }}>
-                                                <button onClick={() => handleApproveRequest(req)} style={{ background: "#e8f5e9", color: "#2e7d32", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Approve</button>
-                                                <button onClick={() => handleRejectRequest(req.id)} style={{ background: "#ffebee", color: "#d32f2f", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Reject</button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))
-                            )}
+                            {generalRequests.map((req) => (
+                                <tr key={req.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                                    <td style={{ padding: "15px", verticalAlign: "top" }}><div style={{ fontWeight: "bold" }}>{req.itemName || req.petName}</div></td>
+                                    <td style={{ padding: "15px", verticalAlign: "top" }}><div style={{ background: "#f9f9f9", padding: "10px", borderRadius: "8px", fontSize: "13px" }}>{Object.entries(req.newData || {}).map(([key, val]) => (<div key={key}>{key}: {val}</div>))}</div></td>
+                                    <td style={{ padding: "15px", verticalAlign: "top", fontStyle: "italic", color: "#555" }}>"{req.reason || "No reason"}"</td>
+                                    <td style={{ padding: "15px", verticalAlign: "top" }}><div style={{ display: "flex", gap: "10px" }}><button onClick={() => handleApproveRequest(req)} style={{ background: "#e8f5e9", color: "#2e7d32", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Approve</button><button onClick={() => handleRejectRequest(req.id)} style={{ background: "#ffebee", color: "#d32f2f", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Reject</button></div></td>
+                                </tr>
+                            ))}
                         </tbody>
                     </table>
                 )}
-
-                {/* ARCHIVED PETS TABLE (NOW INCLUDES REACTIVATION REQUESTS) */}
                 {archiveTab === "pets" && (
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                        <thead style={{ position: "sticky", top: 0, background: "white" }}>
-                            <tr style={{ textAlign: "left", color: "#666" }}>
-                                <th style={{ padding: "15px" }}>Pet Name</th>
-                                <th style={{ padding: "15px" }}>Owner</th>
-                                <th style={{ padding: "15px" }}>Status</th>
-                                <th style={{ padding: "15px" }}>Reason</th>
-                                <th style={{ padding: "15px" }}>Actions</th>
-                            </tr>
-                        </thead>
+                        <thead style={{ position: "sticky", top: 0, background: "white" }}><tr style={{ textAlign: "left", color: "#666" }}><th style={{ padding: "15px" }}>Pet Name</th><th style={{ padding: "15px" }}>Owner</th><th style={{ padding: "15px" }}>Status</th><th style={{ padding: "15px" }}>Actions</th></tr></thead>
                         <tbody>
-                            {archivedPets.length === 0 ? (
-                                <tr><td colSpan="5" style={{padding:"20px", textAlign:"center", color: "#666"}}>No archived pets.</td></tr>
-                            ) : (
-                                archivedPets.map(pet => {
-                                    // Check if there's a restoration request for this pet
-                                    const restoreReq = restoreRequests.find(r => r.petId === pet.id);
-                                    
-                                    return (
-                                    <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1", background: (pet.deletionStatus === "Pending" || restoreReq) ? "#fff8e1" : "transparent" }}>
-                                        <td style={{ padding: "15px", fontWeight: "bold" }}>{pet.name}</td>
-                                        <td style={{ padding: "15px" }}>{users.find(u => u.id === pet.ownerId)?.firstName}</td>
-                                        
-                                        {/* Status Column */}
-                                        <td style={{ padding: "15px" }}>
-                                            {restoreReq ? (
-                                                <span style={{ color: "#2196F3", fontWeight: "bold" }}>Reactivation Requested</span>
-                                            ) : pet.deletionStatus === "Pending" ? (
-                                                <span style={{ color: "orange", fontWeight: "bold" }}>Deletion Pending</span>
-                                            ) : (
-                                                <span style={{ color: "#666" }}>Archived</span>
-                                            )}
-                                        </td>
-
-                                        {/* Reason Column */}
-                                        <td style={{ padding: "15px", fontStyle: "italic", color: "#555" }}>
-                                            {restoreReq ? (
-                                                <span><strong>Owner Reason:</strong> "{restoreReq.reason}"</span>
-                                            ) : (
-                                                pet.deletionReason || pet.archiveReason || "N/A"
-                                            )}
-                                        </td>
-
-                                        {/* Actions Column */}
-                                        <td style={{ padding: "15px" }}>
-                                            {restoreReq ? (
-                                                <div style={{ display: "flex", gap: "8px" }}>
-                                                    <button onClick={() => handleApproveReactivation(restoreReq)} style={{ padding: "6px 12px", background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
-                                                    <button onClick={() => handleRejectReactivation(restoreReq.id)} style={{ padding: "6px 12px", background: "#f44336", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Reject</button>
-                                                </div>
-                                            ) : pet.deletionStatus === "Pending" ? (
+                            {archivedPets.map(pet => {
+                                const restoreReq = restoreRequests.find(r => r.petId === pet.id);
+                                return (
+                                <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1", background: (pet.deletionStatus === "Pending" || restoreReq) ? "#fff8e1" : "transparent" }}>
+                                    <td style={{ padding: "15px", fontWeight: "bold" }}>{pet.name}</td>
+                                    <td style={{ padding: "15px" }}>{users.find(u => u.id === pet.ownerId)?.firstName}</td>
+                                    <td style={{ padding: "15px" }}>{restoreReq ? "Reactivation Requested" : pet.deletionStatus === "Pending" ? "Deletion Pending" : "Archived"}</td>
+                                    <td style={{ padding: "15px" }}>
+                                        {/* --- ACTIONS COLUMN WITH REJECT BUTTONS RESTORED --- */}
+                                        {restoreReq ? (
+                                            <div style={{ display: "flex", gap: "8px" }}>
+                                                <button onClick={() => handleApproveReactivation(restoreReq)} style={{ padding: "6px 12px", background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
+                                                <button onClick={() => handleRejectReactivation(restoreReq.id)} style={{ padding: "6px 12px", background: "#f44336", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Reject</button>
+                                            </div>
+                                        ) : pet.deletionStatus === "Pending" ? (
                                             <div style={{ display: "flex", gap: "8px" }}>
                                                 <button onClick={() => handleApproveDeletion(pet)} style={{ padding: "6px 12px", background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
                                                 <button onClick={() => handleRejectDeletion(pet.id)} style={{ padding: "6px 12px", background: "#f44336", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Reject</button>
                                             </div>
-                                            ) : (
+                                        ) : (
                                             <button onClick={() => handleRestorePet(pet.id)} style={{ padding: "6px 12px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer" }}>Restore</button>
-                                            )}
-                                        </td>
-                                    </tr>
-                                    );
-                                })
-                            )}
+                                        )}
+                                    </td>
+                                </tr>
+                            )})}
                         </tbody>
                     </table>
                 )}
@@ -826,120 +780,131 @@ const handleRejectRequest = async (reqId) => {
           )}
         </div>
 
-        {/* --- 1. CUSTOM MODAL BOX (CENTERED) --- */}
+        {/* --- CUSTOM MODAL BOX --- */}
         {modal.show && (
             <div className="modal-overlay no-print" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000}}>
                 <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "400px", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
                     <h3 style={{margin: "0 0 15px 0", color: "#333"}}>{modal.title}</h3>
                     <p style={{marginBottom: "20px", fontSize: "15px", color: "#555", whiteSpace: "pre-line"}}>{modal.message}</p>
-                    
-                    {/* Input Field for "input" type modal */}
-                    {modal.type === "input" && (
-                        <textarea 
-                            value={modal.inputValue}
-                            onChange={(e) => setModal({...modal, inputValue: e.target.value})}
-                            placeholder="Type here..."
-                            style={{width: "100%", height: "80px", padding: "10px", borderRadius: "6px", border: "1px solid #ddd", marginBottom: "20px", resize: "none", fontFamily: "inherit"}}
-                        />
-                    )}
-
+                    {modal.type === "input" && (<textarea value={modal.inputValue} onChange={(e) => setModal({...modal, inputValue: e.target.value})} placeholder="Type here..." style={{width: "100%", height: "80px", padding: "10px", borderRadius: "6px", border: "1px solid #ddd", marginBottom: "20px", resize: "none", fontFamily: "inherit"}} />)}
                     <div style={{display: "flex", justifyContent: "center", gap: "15px"}}>
-                        {(modal.type === "confirm" || modal.type === "input") ? (
-                            <>
-                                <button onClick={closeModal} style={{ padding: "10px 20px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Cancel</button>
-                                <button onClick={() => modal.onConfirm(modal.inputValue)} style={{ padding: "10px 20px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Confirm</button>
-                            </>
-                        ) : (
-                            <button onClick={closeModal} style={{ padding: "10px 20px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>OK</button>
-                        )}
+                        {(modal.type === "confirm" || modal.type === "input") ? (<><button onClick={closeModal} disabled={isProcessing} style={{ padding: "10px 20px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: isProcessing ? "not-allowed" : "pointer", fontWeight: "bold" }}>Cancel</button><button disabled={isProcessing} onClick={async () => { if (isProcessing) return; setIsProcessing(true); try { await modal.onConfirm(modal.inputValue); } finally { setIsProcessing(false); } }} style={{ padding: "10px 20px", background: isProcessing ? "#90caf9" : "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: isProcessing ? "not-allowed" : "pointer", fontWeight: "bold" }}>{isProcessing ? "Processing..." : "Confirm"}</button></>) : (<button onClick={closeModal} style={{ padding: "10px 20px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>OK</button>)}
                     </div>
                 </div>
             </div>
         )}
 
-        {/* --- 2. BIGGER WIDE CHART MODAL --- */}
+        {/* --- CHART MODAL --- */}
         {showChartModal && (
             <div className="modal-overlay no-print" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1100}}>
                 <div style={{ background: "white", padding: "30px", borderRadius: "12px", width: "900px", maxWidth: "95%", height: "600px", display: "flex", flexDirection: "column" }}>
-                     <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px"}}>
-                        <h3 style={{margin: 0}}>Full Pet Breed Distribution</h3>
-                        <button onClick={() => setShowChartModal(false)} style={{background: "transparent", border: "none", fontSize: "24px", cursor: "pointer", color: "#999"}}>✕</button>
-                     </div>
-                     <div style={{flex: 1, minHeight: 0}}>
-                        <SimpleBarChart data={breedChartData} title="" hideLabels={false} />
-                     </div>
+                     <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px"}}><h3 style={{margin: 0}}>Full Pet Breed Distribution</h3><button onClick={() => setShowChartModal(false)} style={{background: "transparent", border: "none", fontSize: "24px", cursor: "pointer", color: "#999"}}>✕</button></div>
+                     <div style={{flex: 1, minHeight: 0}}><SimpleBarChart data={breedChartData} title="" hideLabels={false} /></div>
                 </div>
             </div>
         )}
 
-        {/* PRINT MODAL */}
+        {/* PRINT MODAL (General List) */}
         {showPrintModal && (
             <div className="modal-overlay no-print" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000}}>
                 <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "500px", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
                     <h3 style={{marginTop: 0}}>Select Pets to Print</h3>
-                    <div style={{ marginBottom: "10px" }}>
-                        <button onClick={handleSelectAllForPrint} style={{ padding: "5px 10px", fontSize: "12px", cursor: "pointer" }}>
-                            {selectedPetsForPrint.length === pets.length ? "Deselect All" : "Select All"}
-                        </button>
-                    </div>
-                    <div style={{ flex: 1, overflowY: "auto", border: "1px solid #eee", padding: "10px", borderRadius: "6px", marginBottom: "15px" }}>
-                        {pets.map(pet => (
-                            <div key={pet.id} onClick={() => togglePetSelection(pet.id)} style={{ padding: "8px", borderBottom: "1px solid #f9f9f9", display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", background: selectedPetsForPrint.includes(pet.id) ? "#e3f2fd" : "white" }}>
-                                <div style={{ width: "16px", height: "16px", borderRadius: "3px", border: "1px solid #ccc", background: selectedPetsForPrint.includes(pet.id) ? "#2196F3" : "white", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    {selectedPetsForPrint.includes(pet.id) && <span style={{color: "white", fontSize: "12px"}}>✓</span>}
-                                </div>
-                                <span>{pet.name}</span>
-                            </div>
-                        ))}
-                    </div>
-                    <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                        <button onClick={() => setShowPrintModal(false)} style={{ padding: "10px 20px", background: "#eee", border: "none", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
-                        <button onClick={executePrint} disabled={selectedPetsForPrint.length === 0} style={{ padding: "10px 20px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", opacity: selectedPetsForPrint.length === 0 ? 0.5 : 1 }}>Print</button>
-                    </div>
+                    <div style={{ marginBottom: "10px" }}><button onClick={handleSelectAllForPrint} style={{ padding: "5px 10px", fontSize: "12px", cursor: "pointer" }}>{selectedPetsForPrint.length === pets.length ? "Deselect All" : "Select All"}</button></div>
+                    <div style={{ flex: 1, overflowY: "auto", border: "1px solid #eee", padding: "10px", borderRadius: "6px", marginBottom: "15px" }}>{pets.map(pet => (<div key={pet.id} onClick={() => togglePetSelection(pet.id)} style={{ padding: "8px", borderBottom: "1px solid #f9f9f9", display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", background: selectedPetsForPrint.includes(pet.id) ? "#e3f2fd" : "white" }}><div style={{ width: "16px", height: "16px", borderRadius: "3px", border: "1px solid #ccc", background: selectedPetsForPrint.includes(pet.id) ? "#2196F3" : "white", display: "flex", alignItems: "center", justifyContent: "center" }}>{selectedPetsForPrint.includes(pet.id) && <span style={{color: "white", fontSize: "12px"}}>✓</span>}</div><span>{pet.name}</span></div>))}</div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}><button onClick={() => setShowPrintModal(false)} style={{ padding: "10px 20px", background: "#eee", border: "none", borderRadius: "6px", cursor: "pointer" }}>Cancel</button><button onClick={executePrintList} disabled={selectedPetsForPrint.length === 0} style={{ padding: "10px 20px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", opacity: selectedPetsForPrint.length === 0 ? 0.5 : 1 }}>Print</button></div>
                 </div>
             </div>
         )}
 
-        {/* PRINT CONTENT */}
+        {/* --- PRINT CONTENT AREA --- */}
         <div className="print-only bond-paper">
-            <div style={{ textAlign: "center", marginBottom: "20px", borderBottom: "2px solid #333", paddingBottom: "10px" }}>
-                <h1 style={{ margin: "0", fontSize: "24px" }}>PawPals Veterinary Clinic</h1>
-                <p style={{ margin: "5px 0" }}>123 Pet Street, Animal City • (555) 123-4567</p>
-                <h2 style={{ margin: "10px 0 0", fontSize: "18px" }}>
-                    {isPrintingAppointments ? "Appointment History Report" : "Registered Pets Report"}
-                </h2>
-                <p style={{ fontSize: "12px", color: "#666" }}>Generated on: {new Date().toLocaleDateString()}</p>
+            {/* Header (Appears on every page technically, but CSS handles page breaks below) */}
+            <div className="print-header">
+                <h1 style={{ margin: "0", fontSize: "24px", color: "#333" }}>PawPals Veterinary Clinic</h1>
+                <p style={{ margin: "5px 0", color: "#666" }}>123 Pet Street, Animal City • (555) 123-4567</p>
+                <div style={{ borderBottom: "2px solid #333", margin: "10px 0" }}></div>
             </div>
-            {isPrintingAppointments ? (
-                <table className="print-table">
-                    <thead><tr><th>Date</th><th>Pet</th><th>Owner</th><th>Service</th><th>Status</th></tr></thead>
-                    <tbody>
-                        {filteredAppointments.map(appt => (
-                            <tr key={appt.id}>
-                                <td>{appt.date}</td>
-                                <td>{pets.find(p => p.id === appt.petId)?.name || "Unknown"}</td>
-                                <td>{users.find(u => u.id === appt.userId)?.firstName}</td>
-                                <td>{appt.reason}</td>
-                                <td>{appt.status}</td>
+
+            {/* SCENARIO 1: APPOINTMENTS LIST */}
+            {printType === "appointments" && (
+                <>
+                    <h2 style={{ textAlign: "center", fontSize: "18px" }}>Appointment History Report</h2>
+                    <table className="print-table">
+                        <thead><tr><th>Date</th><th>Pet</th><th>Owner</th><th>Service</th><th>Status</th></tr></thead>
+                        <tbody>
+                            {filteredAppointments.map(appt => (
+                                <tr key={appt.id}><td>{appt.date}</td><td>{pets.find(p => p.id === appt.petId)?.name || "Unknown"}</td><td>{users.find(u => u.id === appt.userId)?.firstName}</td><td>{appt.reason}</td><td>{appt.status}</td></tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </>
+            )}
+
+            {/* SCENARIO 2: GENERAL PET LIST */}
+            {printType === "pets_list" && (
+                <>
+                    <h2 style={{ textAlign: "center", fontSize: "18px" }}>Registered Pets Report</h2>
+                    <table className="print-table">
+                        <thead><tr><th>Pet Name</th><th>Species/Breed</th><th>Age/Gender</th><th>Owner Name</th><th>Contact</th></tr></thead>
+                        <tbody>
+                            {pets.filter(p => selectedPetsForPrint.includes(p.id)).map(pet => (
+                                <tr key={pet.id}><td>{pet.name}</td><td>{pet.species} / {pet.breed}</td><td>{pet.age} / {pet.gender}</td><td>{users.find(u => u.id === pet.ownerId)?.firstName}</td><td>{users.find(u => u.id === pet.ownerId)?.email}</td></tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </>
+            )}
+
+            {/* SCENARIO 3: SPECIFIC PET MEDICAL HISTORY (One Page Per Pet) */}
+            {printType === "history_single" && viewingRecord && (
+                <div className="print-page">
+                    <h2 style={{ textAlign: "center", fontSize: "20px", marginBottom: "5px", textTransform: "uppercase" }}>Medical History Record</h2>
+                    
+                    {/* PET INFO BLOCK */}
+                    <div style={{ border: "1px solid #999", padding: "10px", margin: "15px 0", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "14px" }}>
+                        <div><strong>Patient Name:</strong> {viewingRecord.name}</div>
+                        <div><strong>Species/Breed:</strong> {viewingRecord.species} / {viewingRecord.breed}</div>
+                        <div><strong>Owner:</strong> {users.find(u => u.id === viewingRecord.ownerId)?.firstName || "N/A"}</div>
+                        <div><strong>Age/Gender:</strong> {viewingRecord.age} {viewingRecord.ageUnit} / {viewingRecord.gender}</div>
+                    </div>
+
+                    {/* HISTORY TABLE */}
+                    <table className="print-table">
+                        <thead>
+                            <tr>
+                                <th style={{width: "15%"}}>Date</th>
+                                <th style={{width: "20%"}}>Diagnosis</th>
+                                <th style={{width: "40%"}}>Treatment / Medicine</th>
+                                <th style={{width: "25%"}}>Notes</th>
                             </tr>
-                        ))}
-                    </tbody>
-                </table>
-            ) : (
-                <table className="print-table">
-                    <thead><tr><th>Pet Name</th><th>Species/Breed</th><th>Age/Gender</th><th>Owner Name</th><th>Contact</th></tr></thead>
-                    <tbody>
-                        {pets.filter(p => selectedPetsForPrint.includes(p.id)).map(pet => (
-                            <tr key={pet.id}>
-                                <td>{pet.name}</td>
-                                <td>{pet.species} / {pet.breed}</td>
-                                <td>{pet.age} / {pet.gender}</td>
-                                <td>{users.find(u => u.id === pet.ownerId)?.firstName}</td>
-                                <td>{users.find(u => u.id === pet.ownerId)?.email}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            {medicalRecords.filter(r => r.petId === viewingRecord.id)
+                                .sort((a, b) => new Date(b.date) - new Date(a.date))
+                                .map(record => (
+                                <tr key={record.id}>
+                                    <td style={{verticalAlign: "top"}}>{record.date}</td>
+                                    <td style={{verticalAlign: "top"}}><strong>{record.diagnosis}</strong></td>
+                                    <td style={{verticalAlign: "top"}}>
+                                        {record.prescriptionDetails ? (
+                                            <ul style={{margin:0, paddingLeft:"15px"}}>{record.prescriptionDetails.map((p,i)=><li key={i}>{p.name} ({p.qty})</li>)}</ul>
+                                        ) : (
+                                            record.treatment || record.medicine || "-"
+                                        )}
+                                    </td>
+                                    <td style={{verticalAlign: "top", fontStyle:"italic"}}>{record.notes}</td>
+                                </tr>
+                            ))}
+                            {medicalRecords.filter(r => r.petId === viewingRecord.id).length === 0 && (
+                                <tr><td colSpan="4" style={{textAlign:"center", padding:"20px"}}>No medical records found.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                    
+                    <div style={{ marginTop: "30px", fontSize: "12px", borderTop: "1px solid #ccc", paddingTop: "5px", textAlign: "center" }}>
+                        PawPals System Generated Record
+                    </div>
+                </div>
             )}
         </div>
       </main>
@@ -948,14 +913,52 @@ const handleRejectRequest = async (reqId) => {
       <style>{`
           .no-print { display: block; }
           .print-only { display: none; }
+
           @media print {
+              /* HIDE EVERYTHING ELSE */
               .no-print, nav, .main-content > div:first-child, .action-btn, .modal-overlay, button, input, select { display: none !important; }
-              body, .dashboard-container, .main-content { background: white !important; overflow: visible !important; height: auto !important; padding: 0 !important; margin: 0 !important; }
-              .print-only { display: block !important; padding: 0.75in; font-family: "Times New Roman", serif; color: black; font-size: 14px; }
-              table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-              th, td { border: 1px solid #333; padding: 8px; text-align: left; font-size: 12px; }
-              th { background-color: #f0f0f0; font-weight: bold; }
+              
+              /* RESET BODY MARGINS TO START AT TOP */
+              body, html, #root, .dashboard-container, .main-content {
+                  background: white !important;
+                  height: auto !important;
+                  width: 100% !important;
+                  margin: 0 !important;
+                  padding: 0 !important;
+                  overflow: visible !important;
+                  position: static !important;
+              }
+
+              /* PRINT CONTAINER POSITIONING */
+              .print-only {
+                  display: block !important;
+                  position: absolute;
+                  top: 0;
+                  left: 0;
+                  width: 100%;
+                  margin: 0;
+                  padding: 20px;
+                  box-sizing: border-box;
+                  font-family: "Helvetica", "Arial", sans-serif;
+                  color: black;
+                  font-size: 12px;
+              }
+
+              /* PAGE BREAK LOGIC */
+              .print-page {
+                  page-break-after: always;
+                  margin-bottom: 20px;
+              }
+              .print-page:last-child {
+                  page-break-after: auto;
+              }
+
+              /* TABLE STYLES */
+              .print-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+              .print-table th, .print-table td { border: 1px solid #000; padding: 6px; text-align: left; font-size: 11px; }
+              .print-table th { background-color: #f0f0f0 !important; font-weight: bold; -webkit-print-color-adjust: exact; }
           }
+          
           ::-webkit-scrollbar { width: 8px; }
           ::-webkit-scrollbar-track { background: #f1f1f1; }
           ::-webkit-scrollbar-thumb { background: #ccc; borderRadius: 4px; }

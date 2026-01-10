@@ -86,6 +86,8 @@ const OwnerDashboard = () => {
   // Data States
   const [myPets, setMyPets] = useState([]);
   const [myAppointments, setMyAppointments] = useState([]);
+  // FIX: Added separate state for Medical Records
+  const [dbMedicalRecords, setDbMedicalRecords] = useState([]); 
   
   // --- NOTIFICATION STATES ---
   const [serverNotifications, setServerNotifications] = useState([]);
@@ -237,15 +239,14 @@ const OwnerDashboard = () => {
       };
       fetchProfile();
 
+      // --- 1. FETCH PETS ---
       const qPets = query(collection(db, "pets"), where("ownerId", "==", user.uid));
       const unsubPets = onSnapshot(qPets, (snap) => {
         const petsData = snap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
         
-        // --- IMPROVED REACTIVATION CHECK LOGIC ---
-        // Checks for the specific 'reactivationAlert' flag set by Admin
+        // Checks for the specific 'reactivationAlert' flag
         petsData.forEach(async (pet) => {
              if (pet.reactivationAlert === true) {
-                 // 1. Show Notification
                  showToast(`🎉 ${pet.name} is back! Reactivation approved.`, "success");
                  setLocalReminders(prev => [{
                      id: `reactivation-${Date.now()}`,
@@ -254,14 +255,9 @@ const OwnerDashboard = () => {
                      type: "alert"
                  }, ...prev]);
 
-                 // 2. Clear the alert flag so it doesn't show again on reload
                  try {
-                    await updateDoc(doc(db, "pets", pet.id), {
-                        reactivationAlert: false
-                    });
-                 } catch (err) {
-                     console.error("Error clearing alert flag:", err);
-                 }
+                    await updateDoc(doc(db, "pets", pet.id), { reactivationAlert: false });
+                 } catch (err) { console.error("Error clearing alert flag:", err); }
              }
         });
 
@@ -269,11 +265,8 @@ const OwnerDashboard = () => {
         petsData.forEach(p => newPetsMap[p.id] = p);
         prevPetsRef.current = newPetsMap;
             
-        // --- UPDATED SORTING: Active first, Inactive last, then Alphabetical ---
         petsData.sort((a, b) => {
-                if (a.isArchived !== b.isArchived) {
-                    return a.isArchived ? 1 : -1;
-                }
+                if (a.isArchived !== b.isArchived) return a.isArchived ? 1 : -1;
                 return a.name.localeCompare(b.name);
             });
 
@@ -281,6 +274,7 @@ const OwnerDashboard = () => {
         if (petsData.length > 0 && !selectedPetId) setSelectedPetId(petsData[0].id);
       });
 
+      // --- 2. FETCH APPOINTMENTS ---
       const qAppts = query(collection(db, "appointments"), where("ownerId", "==", user.uid));
       const unsubAppts = onSnapshot(qAppts, (snap) => {
         const appts = snap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
@@ -307,6 +301,16 @@ const OwnerDashboard = () => {
         setServerNotifications(alerts);
       });
 
+      // --- 3. FIX: FETCH MEDICAL RECORDS SEPARATELY ---
+      const qRecords = query(collection(db, "medical_records"), where("ownerId", "==", user.uid));
+      const unsubRecords = onSnapshot(qRecords, (snap) => {
+          const records = snap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+          // Sort by Date Descending
+          records.sort((a, b) => new Date(b.date) - new Date(a.date));
+          setDbMedicalRecords(records);
+      });
+
+      // --- 4. FETCH MESSAGES ---
       const qChat = query(collection(db, "messages"), orderBy("createdAt", "asc"));
       const unsubChat = onSnapshot(qChat, (snap) => {
           const msgs = snap.docs.map(doc => ({...doc.data(), id: doc.id}))
@@ -314,7 +318,7 @@ const OwnerDashboard = () => {
           setChatMessages(msgs);
       });
 
-      return () => { unsubPets(); unsubAppts(); unsubChat(); };
+      return () => { unsubPets(); unsubAppts(); unsubRecords(); unsubChat(); };
     }
   }, [user, selectedPetId]);
 
@@ -355,9 +359,9 @@ const OwnerDashboard = () => {
       return true;
   });
 
-  const medicalRecords = myAppointments.filter(appt => 
-      appt.diagnosis && appt.diagnosis !== "" && 
-      (recordFilterPetId === 'all' || appt.petId === recordFilterPetId)
+  // --- FIX: Filter the REAL medical records ---
+  const medicalRecords = dbMedicalRecords.filter(record => 
+      recordFilterPetId === 'all' || record.petId === recordFilterPetId
   );
 
   const handleToggleNotifications = () => {
@@ -435,8 +439,23 @@ const OwnerDashboard = () => {
       }
   };
 
-  const handleViewMedicalRecord = (appt) => {
-      setSelectedRecord(appt);
+  // --- FIX: Handle viewing record from appointment list ---
+  const handleViewMedicalRecord = (recordOrAppt) => {
+      // If called from appointments list, we might need to find the matching record
+      if (recordOrAppt.isCompleted || recordOrAppt.status === "Done") {
+          // Try to find the actual medical record using apptId
+          const foundRecord = dbMedicalRecords.find(r => r.apptId === recordOrAppt.id);
+          
+          if (foundRecord) {
+              setSelectedRecord(foundRecord);
+          } else {
+              // Fallback: use the appointment object (might lack diagnosis details if only in appt collection)
+              setSelectedRecord(recordOrAppt);
+          }
+      } else {
+           // It's already a medical record
+           setSelectedRecord(recordOrAppt);
+      }
       setShowMedicalModal(true);
   };
 
@@ -462,16 +481,13 @@ const OwnerDashboard = () => {
       printWindow.document.write('<hr/>');
 
       printWindow.document.write('<div class="section"><p><span class="label">Date of Visit:</span> ' + record.date + '</p>');
-      printWindow.document.write('<p><span class="label">Reason for Visit:</span> ' + (record.reason || "N/A") + '</p></div>');
-
-      printWindow.document.write('<div class="section"><p><span class="label">Symptoms:</span> ' + (record.symptoms || "None") + '</p></div>');
       
-      printWindow.document.write('<div class="section" style="background: #f0f8ff; padding: 10px; border-radius: 5px;">');
-      printWindow.document.write('<p><span class="label">Diagnosis:</span> ' + (record.diagnosis || "N/A") + '</p></div>');
+      printWindow.document.write('<div class="section"><p><span class="label">Diagnosis:</span> ' + (record.diagnosis || "N/A") + '</p></div>');
 
       printWindow.document.write('<div class="section" style="border: 1px solid #333; padding: 15px; margin-top: 20px;">');
-      printWindow.document.write('<h3 style="margin-top:0;">💊 Prescription (Rx)</h3>');
-      printWindow.document.write('<p>' + (record.medicine || "No medications prescribed.") + '</p></div>');
+      printWindow.document.write('<h3 style="margin-top:0;">💊 Prescription / Treatment</h3>');
+      // FIX: Use 'treatment' field first, fallback to 'medicine'
+      printWindow.document.write('<p>' + (record.treatment || record.medicine || "No medications prescribed.") + '</p></div>');
 
       printWindow.document.write('<div class="section"><p><span class="label">Veterinarian Notes:</span> ' + (record.notes || "N/A") + '</p></div>');
       printWindow.document.write('<div class="footer">This document is a computer-generated medical record from PawPals System.</div>');
@@ -1014,7 +1030,7 @@ const OwnerDashboard = () => {
                         </>
                     )}
 
-                    {/* VIEW 2: MEDICAL RECORDS */}
+                    {/* VIEW 2: MEDICAL RECORDS (UPDATED) */}
                     {petSubTab === "records" && (
                         <div style={{flex: 1, display: "flex", flexDirection: "column", overflow: "hidden"}}>
                             <div style={{marginBottom: "20px", display: "flex", gap: "15px", alignItems: "center"}}>
@@ -1031,7 +1047,6 @@ const OwnerDashboard = () => {
                                     <div style={{textAlign: "center", padding: "40px", color: "#999"}}>
                                         <div style={{fontSize: "40px", marginBottom: "10px"}}>📂</div>
                                         <p>No medical records found.</p>
-                                        <small>Only completed appointments appear here.</small>
                                     </div>
                                 ) : (
                                     medicalRecords.map(record => (
@@ -1135,8 +1150,6 @@ const OwnerDashboard = () => {
                                                         <div style={{fontSize: "14px", color: "#666", margin: "4px 0"}}>📅 {appt.date} at {appt.time}</div>
                                                         <div style={{fontSize: "13px", color: "#888"}}>{appt.reason}</div>
                                                         
-                                                        {/* CONDITIONAL BADGE: HIDE APPROVED BADGE IF COMPLETED/DONE/ISCOMPLETED=TRUE */}
-                                                        {/* We hide the Approved badge if: status is Approved AND (it's marked done OR the filter is Completed) */}
                                                         {!(appt.status === "Approved" && (appt.isCompleted || approvedFilter === "Completed" || appt.status === 'Done')) && (
                                                             <span style={{fontSize: "11px", background: getStatusColor(appt.status), color: "white", padding: "2px 8px", borderRadius: "4px", marginTop: "5px", display: "inline-block"}}>{appt.status}</span>
                                                         )}
@@ -1360,7 +1373,7 @@ const OwnerDashboard = () => {
           </div>
       )}
 
-      {/* 5. Medical Record Modal (VIEW ONLY) */}
+      {/* 5. Medical Record Modal (UPDATED TO SHOW TREATMENT) */}
       {showMedicalModal && selectedRecord && (
           <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
               <div style={{background:"white", padding:"30px", borderRadius:"12px", width:"500px", maxWidth:"90%", maxHeight:"80vh", overflowY:"auto"}}>
@@ -1374,7 +1387,9 @@ const OwnerDashboard = () => {
                   </div>
                   <div style={{marginBottom:"15px"}}>
                       <strong>Treatment / Medicine:</strong>
-                      <div style={{background:"#f5f5f5", padding:"10px", borderRadius:"6px", marginTop:"5px"}}>{selectedRecord.medicine || "N/A"}</div>
+                      <div style={{background:"#f5f5f5", padding:"10px", borderRadius:"6px", marginTop:"5px"}}>
+                          {selectedRecord.treatment || selectedRecord.medicine || "N/A"}
+                      </div>
                   </div>
                   <div style={{marginBottom:"20px"}}>
                       <strong>Vet Notes:</strong>
