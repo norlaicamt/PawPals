@@ -381,3 +381,11 @@ tr:hover td { background: #fafafa; }
   h2, h3 { font-size: 1.2rem; }
   .action-btn { width: 100%; margin-top: 10px; }
 }
+
+.hero-image img {
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  border-radius: 16px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}

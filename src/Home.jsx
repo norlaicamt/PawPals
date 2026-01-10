@@ -2,6 +2,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import logoImg from "./assets/logo.png";
+import heroImg from "./assets/hero.jpg";
+
 
 const Home = () => {
   const navigate = useNavigate();
@@ -56,8 +58,9 @@ const Home = () => {
         </div>
 
         <div className="hero-image">
-          <span>🐶</span>
-        </div>
+  <img src={heroImg} alt="Veterinary care" />
+</div>
+
       </header>
 
       {/* --- SERVICES SECTION --- */}
