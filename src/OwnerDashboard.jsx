@@ -1,3 +1,4 @@
+// src/OwnerDashboard.jsx
 import { useEffect, useState, useRef } from "react";
 import { auth, db } from "./firebase";
 import { signOut, updatePassword } from "firebase/auth";
@@ -56,9 +57,14 @@ const OwnerDashboard = () => {
   const navigate = useNavigate();
   const user = auth.currentUser;
   const scrollRef = useRef();
+  
+  // Ref to track previous pet states for notifications
+  const prevPetsRef = useRef({});
 
   const [activeTab, setActiveTab] = useState("pets");
-  const [apptFilter, setApptFilter] = useState("Approved")
+  const [apptFilter, setApptFilter] = useState("Approved");
+  const [approvedFilter, setApprovedFilter] = useState("Active");
+  
   const [requestEditPet, setRequestEditPet] = useState(null);;
 
   // --- MOBILE SUB-TAB STATES ---
@@ -126,6 +132,15 @@ const OwnerDashboard = () => {
       show: false, 
       message: "", 
       onConfirm: () => {} 
+  });
+
+  // --- INPUT MODAL STATE (For Reactivation Reason) ---
+  const [inputModal, setInputModal] = useState({
+      show: false,
+      title: "",
+      message: "",
+      value: "",
+      onConfirm: null
   });
 
   // Profile Data
@@ -224,10 +239,43 @@ const OwnerDashboard = () => {
 
       const qPets = query(collection(db, "pets"), where("ownerId", "==", user.uid));
       const unsubPets = onSnapshot(qPets, (snap) => {
-        const petsData = snap.docs
-            .map(doc => ({ ...doc.data(), id: doc.id }))
-            .filter(pet => !pet.isArchived)
-            .sort((a, b) => a.name.localeCompare(b.name)); 
+        const petsData = snap.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+        
+        // --- IMPROVED REACTIVATION CHECK LOGIC ---
+        // Checks for the specific 'reactivationAlert' flag set by Admin
+        petsData.forEach(async (pet) => {
+             if (pet.reactivationAlert === true) {
+                 // 1. Show Notification
+                 showToast(`🎉 ${pet.name} is back! Reactivation approved.`, "success");
+                 setLocalReminders(prev => [{
+                     id: `reactivation-${Date.now()}`,
+                     text: `🎉 Good News: Your pet ${pet.name} has been reactivated by the Admin.`,
+                     isSeenByOwner: false,
+                     type: "alert"
+                 }, ...prev]);
+
+                 // 2. Clear the alert flag so it doesn't show again on reload
+                 try {
+                    await updateDoc(doc(db, "pets", pet.id), {
+                        reactivationAlert: false
+                    });
+                 } catch (err) {
+                     console.error("Error clearing alert flag:", err);
+                 }
+             }
+        });
+
+        const newPetsMap = {};
+        petsData.forEach(p => newPetsMap[p.id] = p);
+        prevPetsRef.current = newPetsMap;
+            
+        // --- UPDATED SORTING: Active first, Inactive last, then Alphabetical ---
+        petsData.sort((a, b) => {
+                if (a.isArchived !== b.isArchived) {
+                    return a.isArchived ? 1 : -1;
+                }
+                return a.name.localeCompare(b.name);
+            });
 
         setMyPets(petsData);
         if (petsData.length > 0 && !selectedPetId) setSelectedPetId(petsData[0].id);
@@ -292,13 +340,25 @@ const OwnerDashboard = () => {
   const filteredPets = myPets.filter(pet => pet.name.toLowerCase().includes(petSearch.toLowerCase()));
   
   const filteredAppointments = myAppointments.filter(appt => {
-      return appt.status === apptFilter;
+      if (appt.status !== apptFilter) return false;
+      return true;
   });
 
-const medicalRecords = myAppointments.filter(appt => 
-    appt.diagnosis && appt.diagnosis !== "" && 
-    (recordFilterPetId === 'all' || appt.petId === recordFilterPetId)
-);
+  const displayAppointments = filteredAppointments.filter(appt => {
+      if (apptFilter === "Approved") {
+          if (approvedFilter === "Active") {
+              return !appt.isCompleted && appt.status !== "Done";
+          } else {
+              return appt.isCompleted || appt.status === "Done";
+          }
+      }
+      return true;
+  });
+
+  const medicalRecords = myAppointments.filter(appt => 
+      appt.diagnosis && appt.diagnosis !== "" && 
+      (recordFilterPetId === 'all' || appt.petId === recordFilterPetId)
+  );
 
   const handleToggleNotifications = () => {
       setShowNotifDropdown(!showNotifDropdown);
@@ -578,6 +638,34 @@ const medicalRecords = myAppointments.filter(appt =>
     }
   };
   
+  // --- MODIFIED REACTIVATION REQUEST: Uses InputModal instead of prompt ---
+  const handleReactivatePetRequest = (pet) => {
+      setInputModal({
+          show: true,
+          title: "Reactivate Pet",
+          message: `Please provide a reason to reactivate ${pet.name}:`,
+          value: "",
+          onConfirm: async (reason) => {
+            try {
+                await addDoc(collection(db, "edit_requests"), {
+                    type: "pet_restore",
+                    petId: pet.id,
+                    petName: pet.name,
+                    ownerId: user.uid,
+                    reason: reason,
+                    status: "pending",
+                    createdAt: new Date()
+                });
+                showToast("Reactivation request sent to Admin.");
+                setInputModal({ show: false, title: "", message: "", value: "", onConfirm: null });
+            } catch (error) {
+                console.error(error);
+                showToast("Error sending request.", "error");
+            }
+          }
+      });
+  };
+
   const handleBookAppointment = async (e) => {
       e.preventDefault();
       if (!selectedPetId) return showToast("Please add a pet first!", "error");
@@ -891,28 +979,34 @@ const medicalRecords = myAppointments.filter(appt =>
                                         </thead>
                                         <tbody>
                                             {filteredPets.map(pet => (
-                                                <tr key={pet.id} style={{borderBottom: "1px solid #f9f9f9", background: pet.deletionStatus === 'Pending' ? '#ffebee' : 'transparent'}}>
-                                                    <td style={{padding: "15px", fontWeight: "bold", fontSize: "16px"}}>
-                                                        <span style={{marginRight:"10px", fontSize:"20px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span>
-                                                        {pet.name}
-                                                    </td>
-                                                    <td style={{padding: "15px", color: "#555"}}>
-                                                        <div>{pet.species} - {pet.breed}</div>
-                                                        <div style={{fontSize: "12px"}}>{pet.age} {pet.ageUnit} ({pet.gender})</div>
-                                                    </td>
-                                                    <td style={{padding: "15px"}}>
-                                                        {pet.deletionStatus === 'Pending' ? (
-                                                             <span style={{color: "red", fontWeight: "bold", fontSize: "12px", padding: "4px 8px", background: "#ffebee", borderRadius: "4px"}}>Deletion Pending</span>
-                                                        ) : (
-                                                            <div style={{display: "flex", gap: "8px"}}>
-                                                                <button onClick={() => handleViewPetHistory(pet.id)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}}>Records</button>
-                                                                <button onClick={() => setRequestEditPet(pet)} style={{padding: "6px 12px", background: "#ff9800", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}} > Request Edit </button>
-                                                                <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}}>Delete</button>
-                                                            </div>
-                                                        )}
-                                                    </td>
-                                                </tr>
-                                            ))}
+        <tr key={pet.id} style={{
+            borderBottom: "1px solid #f9f9f9", 
+            background: pet.isArchived ? "#f5f5f5" : (pet.deletionStatus === 'Pending' ? '#ffebee' : 'transparent'),
+            opacity: pet.isArchived ? 0.7 : 1 
+        }}>
+            <td style={{padding: "15px", fontWeight: "bold", fontSize: "16px"}}>
+                <span style={{marginRight:"10px", fontSize:"20px"}}>{['Dog','Cat'].includes(pet.species) ? (pet.species==='Dog'?'🐕':'🐈') : '🐾'}</span>
+                {pet.name}
+                {pet.isArchived && <span style={{marginLeft: "10px", fontSize: "10px", background: "#999", color: "white", padding: "2px 6px", borderRadius: "4px"}}>INACTIVE</span>}
+            </td>
+            <td style={{padding: "15px", color: "#555"}}>
+                <div>{pet.species} - {pet.breed}</div>
+                <div style={{fontSize: "12px"}}>{pet.age} {pet.ageUnit} ({pet.gender})</div>
+            </td>
+            <td style={{padding: "15px"}}>
+                {pet.isArchived ? (
+                     <button onClick={() => handleReactivatePetRequest(pet)} style={{padding: "6px 12px", background: "#4CAF50", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "11px"}}>Request Reactivation</button>
+                ) : (
+                    // Existing Buttons (Records, Edit, Delete)
+                    <div style={{display: "flex", gap: "8px"}}>
+                        <button onClick={() => handleViewPetHistory(pet.id)} style={{padding: "6px 12px", background: "#E3F2FD", color: "#1976D2", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}}>Records</button>
+                        <button onClick={() => setRequestEditPet(pet)} style={{padding: "6px 12px", background: "#ff9800", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}} > Request Edit </button>
+                        <button onClick={() => openDeleteModal(pet.id, pet.name)} style={{padding: "6px 12px", background: "none", color: "#f44336", border: "1px solid #f44336", borderRadius: "4px", cursor: "pointer", fontSize: "10px"}}>Delete</button>
+                    </div>
+                )}
+            </td>
+        </tr>
+    ))}
                                         </tbody>
                                     </table>
                                 )}
@@ -1013,16 +1107,39 @@ const medicalRecords = myAppointments.filter(appt =>
                                         </button>
                                     ))}
                                 </div>
+                                
+                                {/* NEW: SUB-FILTER FOR APPROVED APPOINTMENTS */}
+                                {apptFilter === "Approved" && (
+                                    <div style={{ display: "flex", gap: "10px", marginBottom: "10px", paddingLeft: "5px" }}>
+                                        <button onClick={() => setApprovedFilter("Active")} 
+                                            style={{ fontSize: "12px", padding: "5px 12px", borderRadius: "15px", border: "none", cursor: "pointer", background: approvedFilter === "Active" ? "#e3f2fd" : "transparent", color: approvedFilter === "Active" ? "#1565C0" : "#666", fontWeight: "bold" }}>
+                                            Active
+                                        </button>
+                                        <button onClick={() => setApprovedFilter("Completed")} 
+                                            style={{ fontSize: "12px", padding: "5px 12px", borderRadius: "15px", border: "none", cursor: "pointer", background: approvedFilter === "Completed" ? "#e3f2fd" : "transparent", color: approvedFilter === "Completed" ? "#1565C0" : "#666", fontWeight: "bold" }}>
+                                            Completed
+                                        </button>
+                                    </div>
+                                )}
+
                                 <div style={{flex: 1, overflowY: "auto"}}>
-                                    {filteredAppointments.length === 0 ? <p style={{color: "#888", textAlign: "center", marginTop: "40px"}}>No {apptFilter.toLowerCase()} appointments.</p> : (
+                                    {displayAppointments.length === 0 ? <p style={{color: "#888", textAlign: "center", marginTop: "40px"}}>No {apptFilter === "Approved" ? approvedFilter.toLowerCase() : apptFilter.toLowerCase()} appointments.</p> : (
                                         <div style={{display: "flex", flexDirection: "column", gap: "10px"}}>
-                                            {filteredAppointments.map(appt => (
+                                            {displayAppointments.map(appt => (
                                                 <div key={appt.id} style={{border: "1px solid #eee", borderRadius: "8px", padding: "15px", background: "white", display: "flex", justifyContent: "space-between", alignItems: "center", boxShadow: "0 2px 4px rgba(0,0,0,0.02)"}}>
                                                     <div>
-                                                        <div style={{fontWeight: "bold", fontSize: "16px", color: "#333"}}>{appt.petName}</div>
+                                                        <div style={{fontWeight: "bold", fontSize: "16px", color: "#333"}}>
+                                                            {appt.petName}
+                                                            {appt.isCompleted && <span style={{marginLeft: "8px", fontSize: "10px", background:"#4CAF50", color:"white", padding:"2px 6px", borderRadius:"4px"}}>DONE</span>}
+                                                        </div>
                                                         <div style={{fontSize: "14px", color: "#666", margin: "4px 0"}}>📅 {appt.date} at {appt.time}</div>
                                                         <div style={{fontSize: "13px", color: "#888"}}>{appt.reason}</div>
-                                                        <span style={{fontSize: "11px", background: getStatusColor(appt.status), color: "white", padding: "2px 8px", borderRadius: "4px", marginTop: "5px", display: "inline-block"}}>{appt.status}</span>
+                                                        
+                                                        {/* CONDITIONAL BADGE: HIDE APPROVED BADGE IF COMPLETED/DONE/ISCOMPLETED=TRUE */}
+                                                        {/* We hide the Approved badge if: status is Approved AND (it's marked done OR the filter is Completed) */}
+                                                        {!(appt.status === "Approved" && (appt.isCompleted || approvedFilter === "Completed" || appt.status === 'Done')) && (
+                                                            <span style={{fontSize: "11px", background: getStatusColor(appt.status), color: "white", padding: "2px 8px", borderRadius: "4px", marginTop: "5px", display: "inline-block"}}>{appt.status}</span>
+                                                        )}
                                                         
                                                         {appt.status === "Cancelled" && appt.cancellationReason && (
                                                             <div style={{fontSize:"12px", color: "#d32f2f", marginTop: "5px", background: "#ffebee", padding: "5px", borderRadius: "4px"}}>
@@ -1037,11 +1154,16 @@ const medicalRecords = myAppointments.filter(appt =>
                                                                 <button onClick={() => openCancelModal(appt.id)} style={{padding: "6px 12px", fontSize: "12px", background: "#f44336", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>Cancel</button>
                                                             </>
                                                         )}
-                                                        {appt.status === "Approved" && (
+                                                        {/* APPROVED: Show Cancel only if NOT Completed */}
+                                                        {appt.status === "Approved" && !appt.isCompleted && (
                                                             <button onClick={() => openCancelModal(appt.id)} style={{padding: "6px 12px", fontSize: "12px", background: "#f44336", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>Cancel</button>
                                                         )}
-                                                        {appt.status === "Done" && (
-                                                            <button onClick={() => handleViewMedicalRecord(appt)} style={{padding: "6px 12px", fontSize: "12px", background: "#2196F3", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}>View Record</button>
+                                                        {/* APPROVED (Completed) OR DONE: Show View Record */}
+                                                        {(appt.isCompleted || appt.status === "Done") && (
+                                                            <button 
+                                                             onClick={() => handleViewMedicalRecord(appt)} 
+                                                                 style={{padding: "6px 12px", fontSize: "12px", background: "#2196F3", color: "white", border: "none", borderRadius: "4px", cursor: "pointer"}}
+                                                        > View Record </button>
                                                         )}
                                                     </div>
                                                 </div>
@@ -1276,6 +1398,28 @@ const medicalRecords = myAppointments.filter(appt =>
                   <div style={{display: "flex", justifyContent: "center", gap: "15px"}}>
                       <button onClick={() => setConfirmModal({ ...confirmModal, show: false })} style={{ padding: "10px 20px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Cancel</button>
                       <button onClick={() => { confirmModal.onConfirm(); setConfirmModal({ ...confirmModal, show: false }); }} style={{ padding: "10px 20px", background: "#f44336", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Yes</button>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* 8. Generic Input Modal (Replacing Prompt) */}
+      {inputModal.show && (
+          <div className="modal-overlay" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000}}>
+              <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "350px", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
+                  <h3 style={{marginTop: 0, color: "#333"}}>{inputModal.title}</h3>
+                  <p style={{fontSize: "13px", color: "#666", marginBottom: "10px"}}>{inputModal.message}</p>
+                  <input 
+                      type="text" 
+                      autoFocus
+                      placeholder="Enter reason here..." 
+                      value={inputModal.value} 
+                      onChange={(e) => setInputModal({...inputModal, value: e.target.value})} 
+                      style={{width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #ddd", marginBottom: "15px", boxSizing: "border-box"}} 
+                  />
+                  <div style={{display: "flex", gap: "10px"}}>
+                      <button onClick={() => inputModal.onConfirm(inputModal.value)} style={{flex: 1, background: "#4CAF50", color: "white", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"}}>Submit</button>
+                      <button onClick={() => setInputModal({...inputModal, show: false})} style={{flex: 1, background: "#e0e0e0", color: "#333", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"}}>Cancel</button>
                   </div>
               </div>
           </div>

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { auth, db } from "./firebase";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth"; 
-import { doc, getDoc } from "firebase/firestore";
+import { doc, getDoc, collection, addDoc } from "firebase/firestore";
 import { useNavigate, Link } from "react-router-dom";
 import logoImg from "./assets/logo.png";
 
@@ -12,16 +12,28 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(""); 
+  
+  // Custom Alert State (Replaces window.alert)
+  const [alertMsg, setAlertMsg] = useState({ show: false, message: "", type: "" });
+
+  // Reactivation Modal State
+  const [showReactivateModal, setShowReactivateModal] = useState(false);
+  const [reactivateEmail, setReactivateEmail] = useState("");
+  const [reactivateReason, setReactivateReason] = useState("");
+  const [reactivateLoading, setReactivateLoading] = useState(false);
+
   const navigate = useNavigate();
+
+  const showAlert = (message, type = "error") => {
+      setAlertMsg({ show: true, message, type });
+      setTimeout(() => setAlertMsg({ show: false, message: "", type: "" }), 3000);
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(""); 
 
-    // --- SECURITY CHECKS START ---
-    
-    // 1. Check numeric email
     const localPart = email.split('@')[0];
     if (/^\d+$/.test(localPart)) {
         setError("Invalid email format (cannot be purely numeric).");
@@ -29,51 +41,33 @@ const Login = () => {
         return;
     }
 
-    // 2. Check identical password
     if (password === email) {
         setError("Invalid credentials: Password cannot match email.");
         setLoading(false);
         return;
     }
 
-    /* NOTE: I removed the strict Password Regex for LOGIN.
-       It is bad practice to check complexity on Login because if you change
-       your rules later, old admins/staff with simple passwords won't be able to login.
-       Complexity should only be checked during SIGN UP.
-    */
-    // --- SECURITY CHECKS END ---
-
     try {
-      // 1. First, attempt to sign in
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
       
-      // NOTE: We do NOT check verification here yet. We don't know the role yet.
-
-      // 2. Fetch the user details from Firestore
       const docRef = doc(db, "users", user.uid);
       const docSnap = await getDoc(docRef);
 
       if (docSnap.exists()) {
         const userData = docSnap.data();
-        const role = userData.role; // "owner", "staff", or "admin"
+        const role = userData.role; 
 
-        // 3. Check if account is disabled
         if (userData.isDisabled === true) {
             await signOut(auth); 
-            throw new Error("Your account has been disabled. Please contact the administrator.");
+            throw new Error("ACCOUNT_DISABLED");
         }
 
-        // --- NEW LOGIC: CONDITIONAL VERIFICATION ---
-        // Only enforce email verification if the user is an "owner".
-        // Staff and Admins bypass this check.
         if (role === "owner" && !user.emailVerified) {
-             await signOut(auth); // Force logout
+             await signOut(auth); 
              throw new Error("Email not verified. Please check your inbox.");
         }
-        // -------------------------------------------
 
-        // 4. Navigate based on role
         switch (role) {
             case "owner": navigate("/owner-dashboard"); break;
             case "staff": navigate("/staff-dashboard"); break;
@@ -89,42 +83,58 @@ const Login = () => {
     } catch (err) {
       console.error(err);
       let message = err.message;
-      
-      // Handle Firebase specific errors
-      if (err.code === 'auth/invalid-credential') {
-          message = "Incorrect email or password.";
-      } 
-      else if (err.code === 'auth/user-not-found') {
-          message = "Account not found.";
-      }
-      // Handle the manual verification error cleanly
-      else if (message.includes("Email not verified")) {
-          message = "Please verify your email address before logging in.";
-      }
+      if (err.code === 'auth/invalid-credential') message = "Incorrect email or password.";
+      else if (err.code === 'auth/user-not-found') message = "Account not found.";
+      else if (message === "ACCOUNT_DISABLED") message = "Your account has been disabled.";
+      else if (message.includes("Email not verified")) message = "Please verify your email address before logging in.";
       
       setError(message);
     }
     setLoading(false);
   };
 
+  const handleReactivateRequest = async () => {
+      if(!reactivateEmail || !reactivateReason) {
+          showAlert("Please fill in all fields.");
+          return;
+      }
+      setReactivateLoading(true);
+      try {
+          await addDoc(collection(db, "reactivation_requests"), {
+              email: reactivateEmail,
+              reason: reactivateReason,
+              timestamp: new Date()
+          });
+          showAlert("Request sent! You will be notified via email.", "success");
+          setTimeout(() => setShowReactivateModal(false), 2000);
+          setReactivateReason("");
+      } catch (err) {
+          console.error(err);
+          showAlert("Failed to send request. Please try again.");
+      }
+      setReactivateLoading(false);
+  };
+
   return (
     <div className="auth-container">
+      {/* CUSTOM ALERT BOX */}
+      {alertMsg.show && (
+        <div style={{
+            position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)",
+            background: alertMsg.type === "success" ? "#4CAF50" : "#333", color: "white",
+            padding: "10px 20px", borderRadius: "8px", zIndex: 3000, boxShadow: "0 4px 10px rgba(0,0,0,0.2)"
+        }}>
+            {alertMsg.message}
+        </div>
+      )}
+
       <div className="auth-card" style={{ position: "relative" }}>
         
         <button 
           onClick={() => navigate("/")} 
           style={{
-            position: "absolute",
-            top: "15px",
-            left: "15px",
-            background: "none",
-            border: "none",
-            cursor: "pointer",
-            color: "#666",
-            display: "flex",
-            alignItems: "center",
-            fontSize: "14px",
-            fontWeight: "bold"
+            position: "absolute", top: "15px", left: "15px", background: "none", border: "none",
+            cursor: "pointer", color: "#666", display: "flex", alignItems: "center", fontSize: "14px", fontWeight: "bold"
           }}
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginRight: "5px"}}><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
@@ -139,70 +149,71 @@ const Login = () => {
         
         <form onSubmit={handleLogin} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
           <input 
-            type="email" 
-            placeholder="Email Address" 
-            onChange={(e) => setEmail(e.target.value)} 
-            required 
+            type="email" placeholder="Email Address" onChange={(e) => setEmail(e.target.value)} required 
             className="auth-input" 
           />
           
           <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <input 
-              type={showPassword ? "text" : "password"} 
-              placeholder="Password" 
-              onChange={(e) => setPassword(e.target.value)} 
-              required 
-              className="auth-input"
-              style={{ width: "100%", paddingRight: "40px" }}
+              type={showPassword ? "text" : "password"} placeholder="Password" onChange={(e) => setPassword(e.target.value)} required 
+              className="auth-input" style={{ width: "100%", paddingRight: "40px" }}
             />
             <button
-              type="button" 
-              onClick={() => setShowPassword(!showPassword)}
+              type="button" onClick={() => setShowPassword(!showPassword)}
               style={{
-                position: "absolute",
-                right: "10px",
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                color: "#666",
-                padding: "0",
-                display: "flex",
-                alignItems: "center"
+                position: "absolute", right: "10px", background: "none", border: "none", cursor: "pointer", color: "#666", padding: "0", display: "flex", alignItems: "center"
               }}
             >
-              {showPassword ? (
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
-              ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-              )}
+              {showPassword ? "👁️" : "👁️‍🗨️"}
             </button>
           </div>
           
           {error && (
-            <div style={{
-                color: "#d32f2f", 
-                background: "#ffebee", 
-                padding: "10px", 
-                borderRadius: "4px", 
-                fontSize: "14px", 
-                textAlign: "center"
-            }}>
-                {error}
+            <div style={{ color: "#d32f2f", background: "#ffebee", padding: "10px", borderRadius: "4px", fontSize: "14px", textAlign: "center", display: "flex", flexDirection: "column", gap: "5px" }}>
+                <span>{error}</span>
+                {error.includes("disabled") && (
+                    <button type="button" onClick={() => { setReactivateEmail(email); setShowReactivateModal(true); }}
+                        style={{ background: "transparent", border: "none", color: "#d32f2f", textDecoration: "underline", cursor: "pointer", fontSize: "12px", fontWeight: "bold" }}
+                    >
+                        Request Reactivation
+                    </button>
+                )}
             </div>
           )}
 
-          <button 
-            type="submit" 
-            className="action-btn" 
-            style={{ background: "#1565C0", color: "white", width: "100%", padding: "12px", marginTop: "10px" }}
-            disabled={loading}
-          >
+          <button type="submit" className="action-btn" style={{ background: "#1565C0", color: "white", width: "100%", padding: "12px", marginTop: "10px" }} disabled={loading}>
             {loading ? "Verifying..." : "Login"}
           </button>
         </form>
         
         <Link to="/signup" className="auth-link">New Pet Owner? Register here</Link>
       </div>
+
+      {/* REACTIVATION REQUEST MODAL */}
+      {showReactivateModal && (
+          <div style={{
+              position: "fixed", top: 0, left: 0, width: "100%", height: "100%", 
+              background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000
+          }}>
+              <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "350px", textAlign: "center" }}>
+                  <h3 style={{margin: "0 0 15px 0"}}>Reactivate Account</h3>
+                  <p style={{fontSize: "14px", color: "#666", marginBottom: "15px"}}>
+                      Please provide a reason why your account should be reactivated.
+                  </p>
+                  <input type="email" value={reactivateEmail} readOnly style={{width: "100%", padding: "10px", marginBottom: "10px", borderRadius: "6px", border: "1px solid #ddd", background: "#f5f5f5", boxSizing: "border-box"}} />
+                  <textarea 
+                      placeholder="Reason for reactivation..." value={reactivateReason} onChange={(e) => setReactivateReason(e.target.value)}
+                      style={{width: "100%", height: "80px", padding: "10px", borderRadius: "6px", border: "1px solid #ddd", marginBottom: "15px", boxSizing: "border-box", fontFamily: "inherit"}}
+                  />
+                  <div style={{display: "flex", gap: "10px"}}>
+                      <button onClick={() => setShowReactivateModal(false)} style={{flex: 1, padding: "10px", background: "#eee", border: "none", borderRadius: "6px", cursor: "pointer"}}>Cancel</button>
+                      <button onClick={handleReactivateRequest} disabled={reactivateLoading} style={{flex: 1, padding: "10px", background: "#2196F3", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"}}>
+                          {reactivateLoading ? "Sending..." : "Submit"}
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
     </div>
   );
 };

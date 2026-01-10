@@ -1,24 +1,36 @@
-import {createUserWithEmailAndPassword} from "firebase/auth";
+import { createUserWithEmailAndPassword } from "firebase/auth";
 import { useEffect, useState, useRef, useMemo } from "react";
 import { auth, db } from "./firebase";
 import { signOut } from "firebase/auth";
-import { collection, query, onSnapshot, doc, updateDoc, addDoc, setDoc, deleteDoc, getDocs, where, orderBy } from "firebase/firestore";
+import { collection, query, onSnapshot, doc, updateDoc, addDoc, setDoc, getDocs, where, orderBy } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
-import logoImg from "./assets/logo.png"; 
-
+import logoImg from "./assets/logo.png";
 
 // --- CONSTANTS FOR SELECTIONS ---
 const VISIT_REASONS = [
-    "Routine Check-up", 
-    "Follow-up Check-up", 
-    "Vaccination", 
+    "Routine Check-up",
+    "Follow-up Check-up",
+    "Vaccination",
     "Deworming"
 ];
 
 const SYMPTOM_OPTIONS = [
     "Vomiting", "Diarrhea", "Loss of Appetite", "Coughing", "Sneezing",
     "Limping / Lameness", "Skin Irritation / Itching", "Wound / Injury",
-    "Eye Infection / Red Eyes", "Ear Infection / Ear Mites", "Fever", "Weight Loss"
+    "Eye Infection / Red Eyes", "Ear Infection / Ear Mites", "Fever", "Weight Loss", "Other"
+];
+
+// --- PET CONSTANTS (From Owner Dashboard) ---
+const DOG_BREEDS = [
+    "Aspin (Asong Pinoy)", "Beagle", "Bulldog", "Chihuahua", "Dachshund",
+    "German Shepherd", "Golden Retriever", "Labrador", "Poodle", "Pug",
+    "Rottweiler", "Shih Tzu", "Siberian Husky", "Mixed / Unknown", "Other"
+];
+
+const CAT_BREEDS = [
+    "Puspin (Pusang Pinoy)", "Bengal", "British Shorthair", "Maine Coon",
+    "Persian", "Ragdoll", "Russian Blue", "Scottish Fold", "Siamese",
+    "Sphynx", "Mixed / Unknown", "Other"
 ];
 
 const DIAGNOSIS_OPTIONS = [
@@ -32,7 +44,7 @@ const DIAGNOSIS_OPTIONS = [
     "Urinary Tract Infection (UTI)", "Bladder Stones (suspected)", "Pyometra", "Pregnancy",
     "Sprain / Strain", "Fracture", "Arthritis", "Hip Dysplasia (suspected)",
     "Dental Disease", "Tooth Abscess",
-    "Diabetes Mellitus", "Heart Disease", "Kidney Disease", "Liver Disease"
+    "Diabetes Mellitus", "Heart Disease", "Kidney Disease", "Liver Disease", "Other"
 ];
 
 // --- INVENTORY CONSTANTS ---
@@ -44,567 +56,511 @@ const Toast = ({ message, type, onClose }) => {
     if (!message) return null;
     return (
         <div style={{
-            position: "fixed", bottom: "20px", right: "20px", 
+            position: "fixed", bottom: "20px", right: "20px",
             background: type === "error" ? "#f44336" : "#4CAF50",
-            color: "white", padding: "15px 25px", borderRadius: "8px", 
-            boxShadow: "0 4px 12px rgba(0,0,0,0.2)", zIndex: 3000, 
+            color: "white", padding: "15px 25px", borderRadius: "8px",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.2)", zIndex: 3000,
             display: "flex", alignItems: "center", gap: "10px", animation: "slideIn 0.3s ease-out"
         }}>
             <span>{type === "error" ? "⚠️" : "✅"}</span>
-            <span style={{fontWeight: "500"}}>{message}</span>
-            <button onClick={onClose} style={{background:"none", border:"none", color:"white", marginLeft:"10px", cursor:"pointer", fontWeight:"bold"}}>✕</button>
+            <span style={{ fontWeight: "500" }}>{message}</span>
+            <button onClick={onClose} style={{ background: "none", border: "none", color: "white", marginLeft: "10px", cursor: "pointer", fontWeight: "bold" }}>✕</button>
         </div>
     );
 };
 
 const StaffDashboard = () => {
-  const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("appointments"); 
-  const scrollRef = useRef(); 
+    const navigate = useNavigate();
+    const [activeTab, setActiveTab] = useState("appointments");
+    const scrollRef = useRef();
 
-  // --- Notification States ---
-  const [showNotifications, setShowNotifications] = useState(false);
-  const [readNotifIds, setReadNotifIds] = useState([]); 
+    // --- Notification States ---
+    const [showNotifications, setShowNotifications] = useState(false);
+    const [readNotifIds, setReadNotifIds] = useState([]);
 
-  // Toast State
-  const [toast, setToast] = useState({ show: false, message: "", type: "success" });
+    // Toast State
+    const [toast, setToast] = useState({ show: false, message: "", type: "success" });
 
-  const showToast = (message, type = "success") => {
-      setToast({ show: true, message, type });
-      setTimeout(() => setToast({ show: false, message: "", type: "success" }), 3000);
-  };
-
-  // --- CALENDAR STATES ---
-  const [apptViewMode, setApptViewMode] = useState("calendar"); 
-  const [calendarView, setCalendarView] = useState("month"); 
-  const [currentDate, setCurrentDate] = useState(new Date());
-
-  // --- Walk-in Modal States ---
-  const [showWalkInModal, setShowWalkInModal] = useState(false);
-  const [walkInData, setWalkInData] = useState({ ownerId: "", petId: "", petName: "", date: "", time: "", reason: "" });
-
-  // Data States
-  const [appointments, setAppointments] = useState([]);
-  const [owners, setOwners] = useState([]); 
-  const [allPets, setAllPets] = useState([]); 
-  
-  const [apptSubTab, setApptSubTab] = useState("Approved");
-
-  // Consultation Form State
-  const [showConsultModal, setShowConsultModal] = useState(false);
-  const [selectedApptId, setSelectedApptId] = useState(null);
-
-  const [consultData, setConsultData] = useState({ 
-      date: "",
-      reason: [],
-      symptoms: [],
-      diagnosis: "", 
-      medicine: "", 
-      notes: "",
-      followUp: "" 
-  });
-
-  // Records / Pet List State
-  const [petSearch, setPetSearch] = useState("");
-  const [petFilterType, setPetFilterType] = useState("All"); 
-  const [viewingPet, setViewingPet] = useState(null); 
-
-  // Chat States
-  const [selectedChatOwner, setSelectedChatOwner] = useState(null); 
-  const [chatInput, setChatInput] = useState("");
-  const [allMessages, setAllMessages] = useState([]);
-  const [editingMessageId, setEditingMessageId] = useState(null);
-  
-  // --- NEW: SENDING MESSAGE LOCK STATE ---
-  const [isSendingMessage, setIsSendingMessage] = useState(false);
-
-  // --- REPORT STATES ---
-  const [reportStartDate, setReportStartDate] = useState("");
-  const [reportEndDate, setReportEndDate] = useState("");
-  const [reportDetailModal, setReportDetailModal] = useState(null);
-
-  const [showPrintModal, setShowPrintModal] = useState(false);
-
-  // --- CUSTOM CONFIRMATION MODAL STATE ---
-  const [confirmModal, setConfirmModal] = useState({ 
-      show: false, 
-      message: "", 
-      onConfirm: () => {} 
-  });
-
-  const [isSavingInventory, setIsSavingInventory] = useState(false); // Add this
-
-  // --- DECLINE REASON MODAL STATE ---
-  const [declineModal, setDeclineModal] = useState({ 
-      show: false, 
-      apptId: null, 
-      reason: "" 
-  });
-
-  // --- REGISTER OWNER MODAL STATES ---
-const [showRegisterModal, setShowRegisterModal] = useState(false);
-const [registerLoading, setRegisterLoading] = useState(false);
-const [registerError, setRegisterError] = useState("");
-const [registerData, setRegisterData] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    password: "",
-    confirmPassword: ""
-});
-
-  // --- QUICK USAGE MODAL STATE ---
-    const [usageModal, setUsageModal] = useState({ 
-        show: false, 
-        item: null, 
-        qty: 1 
-  });
-
-  // --- INVENTORY STATES ---
-  const [inventory, setInventory] = useState([]);
-  const [inventoryLogs, setInventoryLogs] = useState([]);
-  const [inventorySearch, setInventorySearch] = useState("");
-  const [showInventoryModal, setShowInventoryModal] = useState(false);
-  const [editingInventoryId, setEditingInventoryId] = useState(null); 
-  const [inventoryData, setInventoryData] = useState({
-      name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5});
-const [inventoryFilter, setInventoryFilter] = useState("All");
-
-  // --- DATA FETCHING ---
-  useEffect(() => {
-    const unsubAppts = onSnapshot(query(collection(db, "appointments"), orderBy("date", "desc")), (snap) => 
-        setAppointments(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })))
-    );
-
-    const unsubChat = onSnapshot(query(collection(db, "messages"), orderBy("createdAt", "asc")), (snap) => {
-        setAllMessages(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-    });
-
-    const unsubInventory = onSnapshot(query(collection(db, "inventory"), orderBy("name", "asc")), (snap) => {
-        setInventory(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-    });
-
-    const unsubLogs = onSnapshot(query(collection(db, "inventoryLogs"), orderBy("timestamp", "desc")), (snap) => {
-        setInventoryLogs(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-    });
-
-    const fetchBasicData = async () => {
-        const petSnap = await getDocs(collection(db, "pets"));
-        setAllPets(petSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-        
-        const userSnap = await getDocs(query(collection(db, "users"), where("role", "==", "owner")));
-        setOwners(userSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
-    };
-    fetchBasicData();
-
-    return () => { unsubAppts(); unsubChat(); unsubInventory(); unsubLogs(); };
-  }, []);
-
-  // --- DERIVED STATE ---
-
-  const chatMessages = useMemo(() => {
-    if (!selectedChatOwner) return [];
-    return allMessages.filter(msg => 
-        msg.participants && 
-        msg.participants.includes(selectedChatOwner.id) && 
-        msg.type !== 'notification'
-    );
-  }, [allMessages, selectedChatOwner]);
-
-  const filteredRecords = useMemo(() => {
-    return allPets.filter(pet => {
-      const owner = owners.find(o => o.id === pet.ownerId);
-      const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.toLowerCase() : "";
-      const searchLower = petSearch.toLowerCase();
-      
-      const matchesSearch = pet.name.toLowerCase().includes(searchLower) || ownerName.includes(searchLower);
-      
-      let matchesType = true;
-      if (petFilterType !== "All") {
-          if (petFilterType === "Other") {
-              matchesType = pet.species !== "Dog" && pet.species !== "Cat";
-          } else {
-              matchesType = pet.species === petFilterType;
-          }
-      }
-      return matchesSearch && matchesType;
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  }, [allPets, owners, petSearch, petFilterType]);
-
-  const { generatedStats: _generatedStats, serviceBreakdown: _serviceBreakdown } = useMemo(() => {
-    const emptyStats = {
-        itemsAdded: 0, itemsUsed: 0, totalAppointments: 0,
-        completedAppointments: 0, cancelledAppointments: 0,
-        addedLogs: [], usedLogs: [], rangeApps: []
+    const showToast = (message, type = "success") => {
+        setToast({ show: true, message, type });
+        setTimeout(() => setToast({ show: false, message: "", type: "success" }), 3000);
     };
 
-    if (!reportStartDate || !reportEndDate) {
-        return { generatedStats: emptyStats, serviceBreakdown: {} };
-    }
+    // --- CALENDAR STATES ---
+    const [apptViewMode, setApptViewMode] = useState("calendar");
+    const [calendarView, setCalendarView] = useState("month");
+    const [currentDate, setCurrentDate] = useState(new Date());
 
-    const start = new Date(reportStartDate);
-    const end = new Date(reportEndDate);
-    end.setHours(23, 59, 59, 999);
+    // --- Walk-in Modal States ---
+    const [showWalkInModal, setShowWalkInModal] = useState(false);
+    const [walkInData, setWalkInData] = useState({ ownerId: "", petId: "", petName: "", date: "", time: "", reason: "" });
 
-    let added = 0;
-    let used = 0;
-    const addedLogs = [];
-    const usedLogs = [];
+    // Data States
+    const [appointments, setAppointments] = useState([]);
+    const [owners, setOwners] = useState([]);
+    const [allPets, setAllPets] = useState([]);
+    const [filteredPets, setFilteredPets] = useState([]);
 
-    inventoryLogs.forEach(log => {
-        const logDate = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
-        if (logDate >= start && logDate <= end) {
-            if (log.change > 0) {
-                added += log.change;
-                addedLogs.push({ ...log, date: logDate });
-            } else if (log.change < 0) {
-                used += Math.abs(log.change);
-                usedLogs.push({ ...log, date: logDate, qty: Math.abs(log.change) });
+    const [apptSubTab, setApptSubTab] = useState("Approved");
+    const [approvedFilter, setApprovedFilter] = useState("Active");
+    // Consultation Form State
+    const [showConsultModal, setShowConsultModal] = useState(false);
+    const [selectedApptId, setSelectedApptId] = useState(null);
+
+    const [consultData, setConsultData] = useState({
+        date: "",
+        reason: [],
+        symptoms: [],
+        otherSymptom: "",
+        diagnosis: "",
+        otherDiagnosis: "",
+        medicineId: "",
+        medicineName: "",
+        otherMedicine: "", // Manual input
+        notes: "",
+        followUp: "",
+        dispenseItem: true // <--- NEW: Defaults to true (Deduct Stock)
+    });
+
+    // Records / Pet List State
+    const [petSearch, setPetSearch] = useState("");
+    const [petFilterType, setPetFilterType] = useState("All");
+    const [viewingPet, setViewingPet] = useState(null);
+
+    // Chat States
+    const [selectedChatOwner, setSelectedChatOwner] = useState(null);
+    const [chatInput, setChatInput] = useState("");
+    const [allMessages, setAllMessages] = useState([]);
+    const [editingMessageId, setEditingMessageId] = useState(null);
+
+    // --- NEW: SENDING MESSAGE LOCK STATE ---
+    const [isSendingMessage, setIsSendingMessage] = useState(false);
+
+    // --- REPORT STATES ---
+    const [reportStartDate, setReportStartDate] = useState("");
+    const [reportEndDate, setReportEndDate] = useState("");
+    const [reportDetailModal, setReportDetailModal] = useState(null);
+
+    const [showPrintModal, setShowPrintModal] = useState(false);
+
+    // --- CUSTOM CONFIRMATION MODAL STATE ---
+    const [confirmModal, setConfirmModal] = useState({
+        show: false,
+        message: "",
+        onConfirm: () => { }
+    });
+
+    const [isSavingInventory, setIsSavingInventory] = useState(false); // Add this
+
+    // --- DECLINE REASON MODAL STATE ---
+    const [declineModal, setDeclineModal] = useState({
+        show: false,
+        apptId: null,
+        reason: ""
+    });
+
+    // --- REGISTER OWNER MODAL STATES ---
+    const [showRegisterModal, setShowRegisterModal] = useState(false);
+    const [registerLoading, setRegisterLoading] = useState(false);
+    const [registerError, setRegisterError] = useState("");
+    const [registerData, setRegisterData] = useState({
+        firstName: "",
+        lastName: "",
+        email: "",
+        password: "",
+        confirmPassword: "",
+        // New Pet Fields
+        petName: "",
+        species: "Dog",
+        breed: "",
+        otherBreed: "",
+        age: "",
+        ageUnit: "Years",
+        gender: "Male",
+        medicalHistory: ""
+    });
+
+    // --- QUICK USAGE MODAL STATE ---
+    const [usageModal, setUsageModal] = useState({
+        show: false,
+        item: null,
+        qty: 1
+    });
+
+    // --- INVENTORY STATES ---
+    const [inventory, setInventory] = useState([]);
+    const [inventoryLogs, setInventoryLogs] = useState([]);
+    const [inventorySearch, setInventorySearch] = useState("");
+    const [showInventoryModal, setShowInventoryModal] = useState(false);
+    const [editingInventoryId, setEditingInventoryId] = useState(null);
+    const [updateReason, setUpdateReason] = useState("");
+    const [inventoryData, setInventoryData] = useState({
+        name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5
+    });
+    const [inventoryFilter, setInventoryFilter] = useState("All");
+
+    // --- DATA FETCHING ---
+    useEffect(() => {
+        const unsubAppts = onSnapshot(query(collection(db, "appointments"), orderBy("date", "desc")), (snap) =>
+            setAppointments(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })))
+        );
+
+        const unsubChat = onSnapshot(query(collection(db, "messages"), orderBy("createdAt", "asc")), (snap) => {
+            setAllMessages(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+        });
+
+        const unsubInventory = onSnapshot(query(collection(db, "inventory"), orderBy("name", "asc")), (snap) => {
+            setInventory(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+        });
+
+        const unsubLogs = onSnapshot(query(collection(db, "inventoryLogs"), orderBy("timestamp", "desc")), (snap) => {
+            setInventoryLogs(snap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+        });
+
+        const fetchBasicData = async () => {
+            const petSnap = await getDocs(collection(db, "pets"));
+            setAllPets(petSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+
+            const userSnap = await getDocs(query(collection(db, "users"), where("role", "==", "owner")));
+            setOwners(userSnap.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+        };
+        fetchBasicData();
+
+        return () => { unsubAppts(); unsubChat(); unsubInventory(); unsubLogs(); };
+    }, []);
+
+    useEffect(() => {
+        // Listen for users with role 'owner'
+        const q = query(collection(db, "users"), where("role", "==", "owner"));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const ownersList = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setOwners(ownersList);
+        });
+
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
+        // If no owner is selected in the Walk-in form, clear the pet list
+        if (!walkInData.ownerId) {
+            setFilteredPets([]);
+            return;
+        }
+
+        // Listen for pets belonging specifically to the selected owner
+        const q = query(
+            collection(db, "pets"),
+            where("ownerId", "==", walkInData.ownerId),
+            where("isArchived", "==", false)
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const petsList = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
+            setFilteredPets(petsList);
+        });
+
+        return () => unsubscribe();
+    }, [walkInData.ownerId]);
+
+    // --- DERIVED STATE ---
+    const chatMessages = useMemo(() => {
+        if (!selectedChatOwner) return [];
+        return allMessages.filter(msg =>
+            msg.participants &&
+            msg.participants.includes(selectedChatOwner.id) &&
+            msg.type !== 'notification'
+        );
+    }, [allMessages, selectedChatOwner]);
+
+    const filteredRecords = useMemo(() => {
+        return allPets.filter(pet => {
+            const owner = owners.find(o => o.id === pet.ownerId);
+            const ownerName = owner ? `${owner.firstName} ${owner.lastName}`.toLowerCase() : "";
+            const searchLower = petSearch.toLowerCase();
+
+            const matchesSearch = pet.name.toLowerCase().includes(searchLower) || ownerName.includes(searchLower);
+
+            let matchesType = true;
+            if (petFilterType !== "All") {
+                if (petFilterType === "Other") {
+                    matchesType = pet.species !== "Dog" && pet.species !== "Cat";
+                } else {
+                    matchesType = pet.species === petFilterType;
+                }
+            }
+            return matchesSearch && matchesType;
+        }).sort((a, b) => a.name.localeCompare(b.name));
+    }, [allPets, owners, petSearch, petFilterType]);
+
+    // --- NEW INVENTORY STATS ---
+    const inventoryStats = useMemo(() => {
+        const totalItems = inventory.length;
+        const categoryCounts = {};
+        INVENTORY_CATEGORIES.forEach(cat => categoryCounts[cat] = 0);
+        inventory.forEach(item => {
+            const cat = item.category || "Uncategorized";
+            categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+        });
+
+        const recentActivity = inventoryLogs
+            .filter(log => log.change > 0)
+            .slice(0, 5)
+            .map(log => {
+                const item = inventory.find(i => i.id === log.itemId);
+                return { id: log.id, name: log.itemName, added: log.change, unit: item ? item.unit : "units" };
+            });
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const warningDate = new Date();
+        warningDate.setDate(today.getDate() + 60);
+
+        const expiringItems = inventory.filter(item => {
+            if (!item.expiryDate) return false;
+            const exp = new Date(item.expiryDate);
+            return exp <= warningDate;
+        })
+            .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate))
+            .slice(0, 5);
+
+        return { totalItems, categoryCounts, recentActivity, expiringItems };
+    }, [inventory, inventoryLogs]);
+
+    const appointmentStats = useMemo(() => {
+        const totalAppts = appointments.length;
+        const reasonCounts = {};
+        VISIT_REASONS.forEach(r => reasonCounts[r] = 0);
+        appointments.forEach(app => {
+            const r = app.reason || "Other";
+            reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+        });
+
+        const today = new Date().toISOString().split('T')[0];
+        const upcoming = appointments
+            .filter(app => app.date >= today && app.status !== "Cancelled" && app.status !== "Declined")
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .slice(0, 5);
+
+        return { totalAppts, reasonCounts, upcoming };
+    }, [appointments]);
+
+    // --- AUTO-MARK AS READ LOGIC ---
+    useEffect(() => {
+        if (activeTab === "messages" && selectedChatOwner) {
+            const unreadMsgs = allMessages.filter(
+                m => m.senderId === selectedChatOwner.id && !m.read && m.senderId !== "AI_BOT"
+            );
+
+            if (unreadMsgs.length > 0) {
+                unreadMsgs.forEach(async (msg) => {
+                    try {
+                        await updateDoc(doc(db, "messages", msg.id), { read: true });
+                    } catch (error) {
+                        console.error("Error marking read:", error);
+                    }
+                });
             }
         }
-    });
+    }, [activeTab, selectedChatOwner, allMessages]);
 
-    const rangeApps = appointments.filter(app => {
-        const appDate = new Date(app.date);
-        return appDate >= start && appDate <= end;
-    });
-    
-    const completed = rangeApps.filter(a => a.status === 'Done');
-    const cancelled = rangeApps.filter(a => a.status === 'Cancelled');
-    
-    const breakdown = {};
-    rangeApps.forEach(app => {
-        const type = app.reason || "Other";
-        breakdown[type] = (breakdown[type] || 0) + 1;
-    });
-
-    return {
-        generatedStats: {
-            itemsAdded: added,
-            itemsUsed: used,
-            totalAppointments: rangeApps.length,
-            completedAppointments: completed.length,
-            cancelledAppointments: cancelled.length,
-            addedLogs,
-            usedLogs,
-            rangeApps
-        },
-        serviceBreakdown: breakdown
-    };
-  }, [reportStartDate, reportEndDate, inventoryLogs, appointments]);
-
-// --- NEW INVENTORY STATS (Updated with Expiry) ---
-  const inventoryStats = useMemo(() => {
-      // 1. Total Items
-      const totalItems = inventory.length;
-
-      // 2. Items per Category
-      const categoryCounts = {};
-      INVENTORY_CATEGORIES.forEach(cat => categoryCounts[cat] = 0); 
-      inventory.forEach(item => {
-          const cat = item.category || "Uncategorized";
-          categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
-      });
-
-      // 3. Recently Added Logs (The "+5 boxes" logic)
-      const recentActivity = inventoryLogs
-          .filter(log => log.change > 0)
-          .slice(0, 5)
-          .map(log => {
-              const item = inventory.find(i => i.id === log.itemId);
-              return { id: log.id, name: log.itemName, added: log.change, unit: item ? item.unit : "units" };
-          });
-
-      // 4. Expiring Soon (Next 60 days or already expired)
-      const today = new Date();
-      today.setHours(0,0,0,0);
-      const warningDate = new Date();
-      warningDate.setDate(today.getDate() + 60); // Adjust days as needed
-      
-      const expiringItems = inventory.filter(item => {
-          if (!item.expiryDate) return false; // Skip if no date
-          const exp = new Date(item.expiryDate);
-          return exp <= warningDate;
-      })
-      .sort((a,b) => new Date(a.expiryDate) - new Date(b.expiryDate)) // Oldest/Soonest first
-      .slice(0, 5);
-
-      return { totalItems, categoryCounts, recentActivity, expiringItems };
-  }, [inventory, inventoryLogs]);
-
-  const appointmentStats = useMemo(() => {
-      // 1. Total Appointments
-      const totalAppts = appointments.length;
-
-      // 2. Breakdown by Reason
-      const reasonCounts = {};
-      VISIT_REASONS.forEach(r => reasonCounts[r] = 0); // Initialize known reasons
-      appointments.forEach(app => {
-          const r = app.reason || "Other";
-          reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-      });
-
-      // 3. Upcoming Appointments (Next 5)
-      const today = new Date().toISOString().split('T')[0];
-      const upcoming = appointments
-          .filter(app => app.date >= today && app.status !== "Cancelled" && app.status !== "Declined")
-          .sort((a, b) => a.date.localeCompare(b.date)) // Sort soonest first
-          .slice(0, 5);
-
-      return { totalAppts, reasonCounts, upcoming };
-  }, [appointments]);
-
-  // --- AUTO-MARK AS READ LOGIC ---
-  useEffect(() => {
-    if (activeTab === "messages" && selectedChatOwner) {
-        const unreadMsgs = allMessages.filter(
-            m => m.senderId === selectedChatOwner.id && !m.read && m.senderId !== "AI_BOT"
-        );
-        
-        if (unreadMsgs.length > 0) {
-            unreadMsgs.forEach(async (msg) => {
-                try {
-                    await updateDoc(doc(db, "messages", msg.id), { read: true });
-                } catch (error) {
-                    console.error("Error marking read:", error);
-                }
-            });
+    // --- DATE NORMALIZER ---
+    const normalizeDate = (dateInput) => {
+        if (!dateInput) return "";
+        let d = new Date(dateInput);
+        if (!isNaN(d.getTime())) {
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
         }
-    }
-  }, [activeTab, selectedChatOwner, allMessages]);
+        return "";
+    };
 
+    // --- HELPERS ---
+    const getUnreadCount = (ownerId) => allMessages.filter(m => m.senderId === ownerId && !m.read && m.senderId !== "AI_BOT").length;
+    const totalUnreadMessages = allMessages.filter(m => m.senderId !== auth.currentUser?.uid && !m.read && m.senderId !== "AI_BOT").length;
 
-  // --- DATE NORMALIZER ---
-  const normalizeDate = (dateInput) => {
-      if (!dateInput) return "";
-      let d = new Date(dateInput);
-      if (!isNaN(d.getTime())) {
-          const year = d.getFullYear();
-          const month = String(d.getMonth() + 1).padStart(2, '0');
-          const day = String(d.getDate()).padStart(2, '0');
-          return `${year}-${month}-${day}`;
-      }
-      return "";
-  };
+    const getStockStatus = (item) => {
+        if (item.quantity <= 0) return { label: "Out of Stock", color: "#f44336" };
+        if (item.quantity <= item.threshold) return { label: "Low Stock", color: "#ff9800" };
+        return { label: "In Stock", color: "#4CAF50" };
+    };
 
-  // --- HELPERS ---
-  const getUnreadCount = (ownerId) => allMessages.filter(m => m.senderId === ownerId && !m.read && m.senderId !== "AI_BOT").length;
-  
-  const totalUnreadMessages = allMessages.filter(m => m.senderId !== auth.currentUser?.uid && !m.read && m.senderId !== "AI_BOT").length;
+    // --- PRINT SUMMARY REPORT ---
+    const printSummaryReport = () => {
+        const iframe = document.createElement('iframe');
+        iframe.style.position = 'fixed';
+        iframe.style.right = '0';
+        iframe.style.bottom = '0';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = '0';
+        document.body.appendChild(iframe);
 
-  const getStockStatus = (item) => {
-      if (item.quantity <= 0) return { label: "Out of Stock", color: "#f44336" };
-      if (item.quantity <= item.threshold) return { label: "Low Stock", color: "#ff9800" };
-      return { label: "In Stock", color: "#4CAF50" };
-  };
+        // 1. Calculations
+        const totalItems = inventory.length;
+        const lowStockCount = inventory.filter(i => i.quantity <= i.threshold).length;
+        const today = new Date();
+        const warningDate = new Date(); warningDate.setDate(today.getDate() + 60);
 
-// --- PRINT SUMMARY REPORT (Fully Updated) ---
-  const printSummaryReport = () => {
-      const printWindow = window.open('', '_blank');
-      
-      // 1. Calculate Inventory Stats
-      const totalItems = inventory.length;
-      const lowStockCount = inventory.filter(i => i.quantity <= i.threshold).length;
-      
-      // Expiring Soon (Next 60 days)
-      const today = new Date(); 
-      const warningDate = new Date(); warningDate.setDate(today.getDate() + 60);
-      
-      const expiringItems = inventory.filter(item => {
-          if (!item.expiryDate) return false;
-          const exp = new Date(item.expiryDate);
-          return exp <= warningDate;
-      }).sort((a,b) => new Date(a.expiryDate) - new Date(b.expiryDate)).slice(0, 5);
+        const expiringItems = inventory.filter(item => {
+            if (!item.expiryDate) return false;
+            const exp = new Date(item.expiryDate);
+            return exp <= warningDate;
+        }).sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate)).slice(0, 5);
 
-      // Recently Added Stock (Using Logs for "+5" logic)
-      const recentStockLogs = inventoryLogs
-          .filter(log => log.change > 0)
-          .sort((a,b) => b.timestamp - a.timestamp)
-          .slice(0, 5)
-          .map(log => {
-              const item = inventory.find(i => i.id === log.itemId);
-              return { ...log, unit: item ? item.unit : "units" };
-          });
+        // Using recentStockLogs
+        const recentStockLogs = inventoryLogs
+            .filter(log => log.change > 0)
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, 5)
+            .map(log => {
+                const item = inventory.find(i => i.id === log.itemId);
+                return { ...log, unit: item ? item.unit : "units" };
+            });
 
-      // 2. Calculate Appointment Stats
-      const totalAppts = appointments.length;
-      const reasonCounts = {};
-      VISIT_REASONS.forEach(r => reasonCounts[r] = 0);
-      appointments.forEach(app => {
-          const r = app.reason || "Other";
-          reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-      });
+        const totalAppts = appointments.length;
+        const reasonCounts = {};
+        VISIT_REASONS.forEach(r => reasonCounts[r] = 0);
+        appointments.forEach(app => {
+            const r = app.reason || "Other";
+            reasonCounts[r] = (reasonCounts[r] || 0) + 1;
+        });
 
-      const upcomingAppts = appointments
-          .filter(app => app.date >= today.toISOString().split('T')[0] && app.status !== "Cancelled")
-          .sort((a, b) => a.date.localeCompare(b.date))
-          .slice(0, 5);
+        // Using upcomingAppts
+        const upcomingAppts = appointments
+            .filter(app => app.date >= today.toISOString().split('T')[0] && app.status !== "Cancelled")
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .slice(0, 5);
 
-      printWindow.document.write(`
-          <html>
-              <head>
-                <title>Clinic Status Report</title>
+        // 2. HTML Content
+        const htmlContent = `
+        <html>
+            <head>
                 <style>
-                    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; color: #333; }
-                    h1 { color: #2c3e50; margin-bottom: 5px; text-align: center; }
+                    body { font-family: 'Segoe UI', sans-serif; padding: 40px; color: #333; }
+                    h1 { color: #2c3e50; text-align: center; margin-bottom: 5px; }
                     .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
-                    .meta { color: #888; font-size: 14px; }
-                    
-                    /* Grid Layout (2x2) */
                     .dashboard-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 40px; }
-                    .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+                    .card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px; background: #fff; }
                     .card h3 { margin-top: 0; color: #1976D2; border-bottom: 1px solid #f0f0f0; padding-bottom: 10px; font-size: 16px; }
-                    
-                    /* Lists */
                     ul { padding-left: 20px; margin: 0; }
                     li { margin-bottom: 6px; font-size: 13px; color: #555; }
-                    .highlight { font-weight: bold; color: #333; }
                     .badge-red { color: #d32f2f; font-weight: bold; }
                     .badge-green { color: #2e7d32; font-weight: bold; }
-                    
-                    /* Table */
                     table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
-                    th { background: #f8f9fa; padding: 12px; text-align: left; border-bottom: 2px solid #ddd; font-weight: 600; }
+                    th { background: #f8f9fa; padding: 12px; text-align: left; border-bottom: 2px solid #ddd; }
                     td { padding: 10px; border-bottom: 1px solid #eee; }
-                    tr:nth-child(even) { background-color: #fcfcfc; }
                 </style>
-              </head>
-              <body>
-                  <div class="header">
-                      <h1>PawPals Clinic Report</h1>
-                      <div class="meta">Generated on ${new Date().toLocaleString()}</div>
-                  </div>
+            </head>
+            <body>
+                <div class="header">
+                    <h1>PawPals Clinic Report</h1>
+                    <div style="color:#888;">Generated: ${new Date().toLocaleString()}</div>
+                </div>
 
-                  <div class="dashboard-grid">
-                      
-                      <div class="card">
-                          <h3>📦 Inventory Health</h3>
-                          <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                              <span>Total Items:</span>
-                              <span class="highlight">${totalItems}</span>
-                          </div>
-                          <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                              <span>Low Stock Alerts:</span>
-                              <span class="${lowStockCount > 0 ? 'badge-red' : 'badge-green'}">${lowStockCount} items</span>
-                          </div>
-                          <div style="margin-top:15px;">
-                              <strong>⚠️ Expiring Soon (< 60 days):</strong>
-                              ${expiringItems.length > 0 ? `
-                                  <ul style="margin-top:5px;">
-                                      ${expiringItems.map(i => `<li>${i.name} - <span class="badge-red">${i.expiryDate}</span></li>`).join('')}
-                                  </ul>
-                              ` : '<div style="font-style:italic; font-size:12px; color:#888">No expiring items</div>'}
-                          </div>
-                      </div>
+                <div class="dashboard-grid">
+                    <div class="card">
+                        <h3>📦 Inventory Health</h3>
+                        <div>Total: <b>${totalItems}</b> | Low: <b class="badge-red">${lowStockCount}</b></div>
+                        <p style="font-size:12px; margin-bottom:5px;"><b>Expiring Soon:</b></p>
+                        <ul>
+                            ${expiringItems.length > 0 ? expiringItems.map(i => `<li>${i.name} (${i.expiryDate})</li>`).join('') : '<li>None</li>'}
+                        </ul>
+                    </div>
 
-                      <div class="card">
-                          <h3>📅 Appointment Overview</h3>
-                          <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
-                              <span>Total Records:</span>
-                              <span class="highlight">${totalAppts}</span>
-                          </div>
-                          <div style="margin-top:10px;">
-                              <strong>Breakdown by Reason:</strong>
-                              <ul style="margin-top:5px;">
-                                  ${Object.entries(reasonCounts).filter(([,c])=>c>0).map(([k,v]) => `<li>${k}: ${v}</li>`).join('')}
-                              </ul>
-                          </div>
-                      </div>
+                    <div class="card">
+                        <h3>📅 Appointments</h3>
+                        <div>Total: <b>${totalAppts}</b></div>
+                        <ul style="margin-top:10px;">
+                            ${Object.entries(reasonCounts).filter(([, c]) => c > 0).map(([k, v]) => `<li>${k}: ${v}</li>`).join('')}
+                        </ul>
+                    </div>
 
-                      <div class="card">
-                          <h3>📥 Recently Added Stock</h3>
-                          ${recentStockLogs.length > 0 ? `
-                              <ul>
-                                  ${recentStockLogs.map(log => `
-                                      <li>
-                                          <strong>${log.itemName}</strong> 
-                                          <span class="badge-green">+${log.change} ${log.unit}</span>
-                                      </li>
-                                  `).join('')}
-                              </ul>
-                          ` : '<div style="color:#888; font-style:italic">No recent additions</div>'}
-                      </div>
+                    <div class="card">
+                        <h3>📥 Recent Stock Additions</h3>
+                        <ul>
+                            ${recentStockLogs.length > 0 ? recentStockLogs.map(log => `
+                                <li>${log.itemName}: <span class="badge-green">+${log.change} ${log.unit}</span></li>
+                            `).join('') : '<li>No recent changes</li>'}
+                        </ul>
+                    </div>
 
-                      <div class="card">
-                          <h3>🔜 Upcoming Schedule</h3>
-                          ${upcomingAppts.length > 0 ? `
-                              <ul>
-                                  ${upcomingAppts.map(app => `
-                                      <li>
-                                          <strong>${app.date}</strong>: ${app.petName} 
-                                          <br/><span style="color:#888; font-size:11px">${app.reason}</span>
-                                      </li>
-                                  `).join('')}
-                              </ul>
-                          ` : '<div style="color:#888; font-style:italic">No upcoming appointments</div>'}
-                      </div>
-                  </div>
+                    <div class="card">
+                        <h3>🔜 Upcoming Schedule</h3>
+                        <ul>
+                            ${upcomingAppts.length > 0 ? upcomingAppts.map(app => `
+                                <li><b>${app.date}</b>: ${app.petName} (${app.reason})</li>
+                            `).join('') : '<li>No upcoming appointments</li>'}
+                        </ul>
+                    </div>
+                </div>
 
-                  <h3>Detailed Inventory List</h3>
-                  <table>
-                      <thead>
-                          <tr>
-                              <th>Item Name</th>
-                              <th>Category</th>
-                              <th>Quantity</th>
-                              <th>Expiry Date</th>
-                              <th>Status</th>
-                          </tr>
-                      </thead>
-                      <tbody>
-                          ${inventory.map(item => `
-                              <tr>
-                                  <td>${item.name}</td>
-                                  <td>${item.category}</td>
-                                  <td>${item.quantity} ${item.unit}</td>
-                                  <td>${item.expiryDate || "N/A"}</td>
-                                  <td>${getStockStatus(item).label}</td>
-                              </tr>
-                          `).join('')}
-                      </tbody>
-                  </table>
-              </body>
-          </html>
-      `);
-      printWindow.document.close();
-  };
-// --- UPDATED PRINT INVENTORY REPORT ---
-const printInventoryReport = (filterType = "All") => {
-    const printWindow = window.open('', '_blank');
-    const today = new Date().toLocaleDateString();
-    
-    // 1. Filter the inventory based on selection
-    let filteredInventory = [];
-    let reportTitle = "";
+                <h3>Detailed Inventory</h3>
+                <table>
+                    <thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Status</th></tr></thead>
+                    <tbody>
+                        ${inventory.map(item => `
+                            <tr>
+                                <td>${item.name}</td>
+                                <td>${item.category}</td>
+                                <td>${item.quantity} ${item.unit}</td>
+                                <td>${item.quantity <= item.threshold ? 'Low Stock' : 'Good'}</td>
+                            </tr>`).join('')}
+                    </tbody>
+                </table>
+            </body>
+        </html>
+    `;
 
-    if (filterType === "Low Stock") {
-        // Items that are low but not empty (0 < qty <= threshold)
-        // OR you can include 0 if you prefer. Here I follow your status logic.
-        filteredInventory = inventory.filter(i => i.quantity > 0 && i.quantity <= i.threshold);
-        reportTitle = "Low Stock Inventory Report";
-    } else if (filterType === "Out of Stock") {
-        // Items with 0 or less
-        filteredInventory = inventory.filter(i => i.quantity <= 0);
-        reportTitle = "Out of Stock Inventory Report";
-    } else {
-        // "All Stock"
-        filteredInventory = inventory;
-        reportTitle = "Full Inventory Report";
-    }
+        const doc = iframe.contentWindow.document;
+        doc.open();
+        doc.write(htmlContent);
+        doc.close();
 
-    const totalItems = filteredInventory.length;
+        setTimeout(() => {
+            iframe.contentWindow.focus();
+            iframe.contentWindow.print();
+            document.body.removeChild(iframe);
+        }, 500);
+    };
 
-    // Optional: Alert if report is empty
-    if (totalItems === 0) {
-        alert(`No items found for '${filterType}'.`);
-        printWindow.close();
-        return;
-    }
-    
-    // 2. Generate rows
-    const tableRows = filteredInventory.map(item => {
-        const status = getStockStatus(item);
-        return `
+    // --- UPDATED PRINT INVENTORY REPORT ---
+    const printInventoryReport = (filterType = "All") => {
+        const printWindow = window.open('', '_blank');
+        const today = new Date().toLocaleDateString();
+
+        let filteredInventory = [];
+        let reportTitle = "";
+
+        if (filterType === "Low Stock") {
+            filteredInventory = inventory.filter(i => i.quantity > 0 && i.quantity <= i.threshold);
+            reportTitle = "Low Stock Inventory Report";
+        } else if (filterType === "Out of Stock") {
+            filteredInventory = inventory.filter(i => i.quantity <= 0);
+            reportTitle = "Out of Stock Inventory Report";
+        } else {
+            filteredInventory = inventory;
+            reportTitle = "Full Inventory Report";
+        }
+
+        const totalItems = filteredInventory.length;
+
+        if (totalItems === 0) {
+            alert(`No items found for '${filterType}'.`);
+            printWindow.close();
+            return;
+        }
+
+        const tableRows = filteredInventory.map(item => {
+            const status = getStockStatus(item);
+            return `
             <tr>
                 <td>${item.name}</td>
                 <td>${item.category}</td>
@@ -614,10 +570,9 @@ const printInventoryReport = (filterType = "All") => {
                 <td style="color:${status.color}; font-weight:bold;">${status.label}</td>
             </tr>
         `;
-    }).join('');
+        }).join('');
 
-    // 3. Write HTML
-    printWindow.document.write(`
+        printWindow.document.write(`
         <html>
             <head>
                 <title>${reportTitle}</title>
@@ -656,1445 +611,1742 @@ const printInventoryReport = (filterType = "All") => {
             </body>
         </html>
     `);
-    
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
-    
-    // Close the options modal after printing
-    setShowPrintModal(false);
-};
 
-  // --- ACTIONS ---
-  const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
-  
-  // --- DECLINE ACTIONS ---
-  const openDeclineModal = (apptId) => {
-      setDeclineModal({ show: true, apptId, reason: "" });
-  };
+        printWindow.document.close();
+        printWindow.focus();
+        printWindow.print();
+        setShowPrintModal(false);
+    };
 
-  const handleConfirmDecline = async () => {
-      if (!declineModal.reason.trim()) return showToast("Please provide a reason.", "error");
-      
-      try {
-          await updateDoc(doc(db, "appointments", declineModal.apptId), {
-              status: "Cancelled", 
-              cancellationReason: declineModal.reason,
-              staffId: auth.currentUser.uid,
-              lastUpdated: new Date()
-          });
-          showToast("Appointment declined.");
-          setDeclineModal({ show: false, apptId: null, reason: "" });
-      } catch (err) {
-          console.error(err);
-          showToast("Error declining appointment.", "error");
-      }
-  };
+    // --- ACTIONS ---
+    const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
 
-  // --- INVENTORY ACTIONS ---
-  const handleOpenAddInventory = () => {
-      setEditingInventoryId(null);
-      setInventoryData({ name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5 });
-      setShowInventoryModal(true);
-  };
+    // --- DECLINE ACTIONS ---
+    const openDeclineModal = (apptId) => {
+        setDeclineModal({ show: true, apptId, reason: "" });
+    };
 
-  const handleOpenEditInventory = (item) => {
-      setEditingInventoryId(item.id);
-      setInventoryData({ 
-          name: item.name, 
-          category: item.category, 
-          quantity: item.quantity, 
-          unit: item.unit, 
-          expiryDate: item.expiryDate || "", 
-          threshold: item.threshold || 5 
-      });
-      setShowInventoryModal(true);
-  };
+    const handleConfirmDecline = async () => {
+        if (!declineModal.reason.trim()) return showToast("Please provide a reason.", "error");
 
-    const handleDeleteInventory = (id) => {
-      setConfirmModal({
-          show: true,
-          message: "Are you sure you want to delete this item? This cannot be undone.",
-          onConfirm: async () => {
-              try {
-                  await deleteDoc(doc(db, "inventory", id));
-                  showToast("Item deleted.", "error");
-              } catch (err) {
-                  console.error(err);
-                  showToast("Error deleting item.", "error");
-              }
-          }
-      });
-  };
-
-const confirmQuickUsage = async () => {
-    const { item, qty } = usageModal;
-    if (!item || qty <= 0) return;
-
-    if (item.quantity < qty) {
-        showToast("Not enough stock available", "error");
-        return;
-    }
-
-    try {
-        await updateDoc(doc(db, "inventory", item.id), {
-            quantity: item.quantity - qty,
-            lastUpdated: new Date()
-        });
-        
-        await addDoc(collection(db, "inventoryLogs"), {
-            itemId: item.id,
-            itemName: item.name,
-            change: -qty,
-            reason: "Quick Usage",
-            timestamp: new Date()
-        });
-        showToast(`Recorded usage of ${qty} ${item.unit}`);
-        setUsageModal({ show: false, item: null, qty: 1 });
-    } catch (err) {
-        console.error(err);
-        showToast("Error updating stock", "error");
-    }
-  };
-
-const handleSaveInventory = async (e) => {
-      e.preventDefault();
-      if (isSavingInventory) return; // Stop if already saving
-
-      setIsSavingInventory(true); // Lock the button
-      try {
-          if (editingInventoryId) {
-              const oldItem = inventory.find(i => i.id === editingInventoryId);
-              const qtyDiff = inventoryData.quantity - oldItem.quantity;
-              
-              await updateDoc(doc(db, "inventory", editingInventoryId), {
-                  ...inventoryData,
-                  lastUpdated: new Date()
-              });
-
-              if (qtyDiff !== 0) {
-                   await addDoc(collection(db, "inventoryLogs"), {
-                      itemId: editingInventoryId,
-                      itemName: inventoryData.name,
-                      change: qtyDiff,
-                      reason: "Manual Edit",
-                      timestamp: new Date()
-                  });
-              }
-              showToast("Inventory updated successfully!");
-          } else {
-              const docRef = await addDoc(collection(db, "inventory"), {
-                  ...inventoryData,
-                  createdAt: new Date()
-              });
-              
-              await addDoc(collection(db, "inventoryLogs"), {
-                  itemId: docRef.id,
-                  itemName: inventoryData.name,
-                  change: inventoryData.quantity,
-                  reason: "Initial Stock",
-                  timestamp: new Date()
-              });
-              showToast("Item added to inventory!");
-          }
-          setShowInventoryModal(false);
-          setInventoryData({ name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5 });
-          setEditingInventoryId(null);
-      } catch (err) {
-          console.error(err);
-          showToast("Error saving inventory.", "error");
-      } finally {
-          setIsSavingInventory(false); // Unlock the button no matter what
-      }
-  };
-
-  const handleRegisterOwner = async (e) => {
-    e.preventDefault();
-    setRegisterError("");
-
-    // 1. Validation (Adapted from Signup.jsx)
-    const { firstName, lastName, email, password, confirmPassword } = registerData;
-    const nameRegex = /^[a-zA-Z\s]*$/;
-
-    if (!firstName || !lastName || !email || !password) {
-        return setRegisterError("Please fill in all fields.");
-    }
-    if (!nameRegex.test(firstName) || !nameRegex.test(lastName)) {
-        return setRegisterError("Names must contain only letters.");
-    }
-    if (password !== confirmPassword) {
-        return setRegisterError("Passwords do not match.");
-    }
-    if (password.length < 8) {
-        return setRegisterError("Password must be at least 8 characters.");
-    }
-
-    setRegisterLoading(true);
-
-    try {
-        // NOTE: In a real app, creating a user here might log out the Staff account.
-        // Ideally, use a secondary Firebase App instance or Cloud Function to create users without auth switching.
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        const newUser = userCredential.user;
-
-        // 2. Save to Firestore (users collection)
-        await setDoc(doc(db, "users", newUser.uid), {
-            firstName: firstName,
-            lastName: lastName,
-            email: email,
-            role: "owner",
-            createdAt: new Date()
-        });
-
-        // 3. Auto-select this new owner for the Walk-In
-        setWalkInData({ ...walkInData, ownerId: newUser.uid });
-
-        showToast("New Owner Registered Successfully!");
-        
-        // 4. Reset and Close
-        setRegisterData({ firstName: "", lastName: "", email: "", password: "", confirmPassword: "" });
-        setShowRegisterModal(false);
-
-    } catch (err) {
-        console.error(err);
-        if (err.code === "auth/email-already-in-use") {
-            setRegisterError("Email is already registered.");
-        } else {
-            setRegisterError("Failed to register: " + err.message);
-        }
-    } finally {
-        setRegisterLoading(false);
-    }
-};
-
-  // --- CALENDAR APP CLICK HANDLER ---
-  const handleCalendarApptClick = (appt) => {
-      setApptSubTab(appt.status);
-      setApptViewMode("list");
-  };
-
-  const openConsultModal = (apptId) => {
-      setSelectedApptId(apptId);
-      const appt = appointments.find(a => a.id === apptId);
-      const scheduledDate = normalizeDate(appt.date);
-      const existingSymptoms = appt.symptoms ? appt.symptoms.split(", ") : [];
-
-      setConsultData({ 
-          date: scheduledDate || new Date().toISOString().split('T')[0],
-          reason: appt.reason || "",
-          symptoms: existingSymptoms, 
-          diagnosis: appt.diagnosis || "", 
-          medicine: appt.medicine || "", 
-          notes: appt.notes || "", 
-          followUp: "" 
-      });
-      setShowConsultModal(true);
-  };
-
-  const handleFinishConsultation = async (e) => {
-      e.preventDefault();
-      if (!selectedApptId) return;
-
-      const symptomsString = consultData.symptoms.join(", ");
-
-      await updateDoc(doc(db, "appointments", selectedApptId), {
-          status: "Approved", // Changed from "Done" to "Approved"
-          date: consultData.date,
-          reason: consultData.reason,
-          symptoms: symptomsString, 
-          diagnosis: consultData.diagnosis,
-          medicine: consultData.medicine,
-          notes: consultData.notes,
-          followUpDate: consultData.followUp,
-          staffId: auth.currentUser.uid
-      });
-
-      if (consultData.followUp) {
-          const currentAppt = appointments.find(a => a.id === selectedApptId);
-          if (currentAppt) {
-              try {
-                  await addDoc(collection(db, "appointments"), {
-                      ownerId: currentAppt.ownerId,
-                      petId: currentAppt.petId,
-                      petName: currentAppt.petName,
-                      date: consultData.followUp,
-                      time: currentAppt.time || "09:00",
-                      reason: `Follow-up: ${consultData.diagnosis}`,
-                      status: "Approved",
-                      type: "follow-up",
-                      createdAt: new Date(),
-                      staffId: auth.currentUser.uid
-                  });
-                  showToast("Consultation Completed & Follow-up Scheduled!");
-              } catch (error) { console.error(error); }
-          }
-      } else {
-          showToast("Consultation Completed!");
-      }
-      setShowConsultModal(false);
-  };
-  
-  const handleSymptomChange = (symptom) => {
-      setConsultData(prev => {
-          const exists = prev.symptoms.includes(symptom);
-          if (exists) {
-              return { ...prev, symptoms: prev.symptoms.filter(s => s !== symptom) };
-          } else {
-              return { ...prev, symptoms: [...prev.symptoms, symptom] };
-          }
-      });
-  };
-
-  const handleStartEdit = (msg) => { setEditingMessageId(msg.id); setChatInput(msg.text); };
-  const handleCancelEdit = () => { setEditingMessageId(null); setChatInput(""); };
-
-  const handleSendMessage = async (e) => {
-      e.preventDefault();
-      if(!chatInput.trim() || !selectedChatOwner) return;
-
-      if (isSendingMessage) return; // Prevent multiple clicks
-      setIsSendingMessage(true);
-
-      try {
-        if (editingMessageId) {
-            await updateDoc(doc(db, "messages", editingMessageId), { text: chatInput, isEdited: true });
-            setEditingMessageId(null);
-        } else {
-            await addDoc(collection(db, "messages"), { 
-                text: chatInput, senderId: auth.currentUser.uid, senderName: "Staff", receiverId: selectedChatOwner.id, createdAt: new Date(), participants: [auth.currentUser.uid, selectedChatOwner.id], type: "chat", read: false 
-            });
-        }
-        setChatInput("");
-      } catch (error) {
-        console.error("Error sending message:", error);
-      } finally {
-        setIsSendingMessage(false);
-      }
-  };
-
-  const handleLogout = () => { setConfirmModal ({ show: true, message: "Are you sure want to log out?", onConfirm: async () => {await signOut(auth); navigate("/");
-        }
-    }); 
-};
-  
-  const handleCreateWalkIn = async (e) => {
-      e.preventDefault();
-      const selectedDate = new Date(walkInData.date);
-      if (selectedDate.getDay() === 6) return showToast("Cannot book on Saturdays. Clinic is closed.", "error");
-
-      const qConflict = query(collection(db, "appointments"), where("date", "==", walkInData.date), where("time", "==", walkInData.time));
-      const snapshot = await getDocs(qConflict);
-      const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled");
-
-      if (hasConflict) {
-          return showToast(`Time slot ${walkInData.time} is already booked!`, "error");
-      }
-
-      try {
-          await addDoc(collection(db, "appointments"), {
-              ownerId: walkInData.ownerId,
-              petId: walkInData.petId,
-              petName: walkInData.petName,
-              date: walkInData.date,
-              time: walkInData.time,
-              reason: walkInData.reason,
-              status: "Approved", 
-              type: "walk-in",
-              createdAt: new Date(),
-              staffId: auth.currentUser.uid
-          });
-          showToast("Walk-in appointment created successfully!");
-          setShowWalkInModal(false);
-          setWalkInData({ ownerId: "", petId: "", petName: "", date: "", time: "", reason: "" });
-      } catch (err) {
-          console.error(err);
-          showToast("Error creating appointment.", "error");
-      }
-  };
-
-  // --- CALENDAR LOGIC ---
-  const handleDateNavigate = (direction) => {
-    const newDate = new Date(currentDate);
-    if (calendarView === 'month') newDate.setMonth(newDate.getMonth() + direction);
-    else newDate.setDate(newDate.getDate() + (direction * 7));
-    setCurrentDate(newDate);
-  };
-
-  const getStartOfWeek = (date) => {
-      const d = new Date(date);
-      const day = d.getDay(); 
-      const diff = d.getDate() - day; 
-      return new Date(d.setDate(diff));
-  };
-
-  const renderMonthView = () => {
-      const year = currentDate.getFullYear();
-      const month = currentDate.getMonth();
-      const daysInMonth = new Date(year, month + 1, 0).getDate();
-      const firstDayOfMonth = new Date(year, month, 1).getDay();
-      
-      const cells = [];
-      for (let i = 0; i < firstDayOfMonth; i++) cells.push(<div key={`empty-${i}`} style={{background:"#f9f9f9", border:"1px solid #eee"}}></div>);
-      
-      for (let d = 1; d <= daysInMonth; d++) {
-          const currentCellDate = new Date(year, month, d);
-          const dateStr = normalizeDate(currentCellDate); 
-          const isToday = normalizeDate(new Date()) === dateStr;
-          const isSaturday = currentCellDate.getDay() === 6; 
-          
-          const dayAppts = appointments.filter(a => normalizeDate(a.date) === dateStr && a.status !== "Cancelled" && a.status !== "Done");
-          
-          cells.push(
-              <div key={d} style={{minHeight:"80px", background: isSaturday ? "#eeeeee" : (isToday ? "#e3f2fd" : "white"), border:"1px solid #eee", padding:"5px", opacity: isSaturday?0.6:1 }}>
-                  <div style={{fontWeight:"bold", color: isSaturday?"red":(isToday?"#1565C0":"#333")}}>{d} {isSaturday&&""}</div>
-                  <div style={{display:"flex", flexDirection:"column", gap:"2px", maxHeight: "60px", overflowY: "auto"}}>
-                      {dayAppts.map(a => (
-                          <div key={a.id} onClick={() => handleCalendarApptClick(a)} style={{background:a.status==='Pending'?'orange':'green', color:"white", padding:"2px", borderRadius:"3px", fontSize:"10px", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis", cursor: "pointer"}}>
-                              {a.time} {a.petName}
-                          </div>
-                      ))}
-                  </div>
-              </div>
-          );
-      }
-      return <div style={{display:"grid", gridTemplateColumns:"repeat(7, 1fr)", gap:"5px", flex: 1, overflowY:"auto"}}>{cells}</div>;
-  };
-
-  const renderWeekView = () => {
-      const startOfWeek = getStartOfWeek(currentDate);
-      const days = [];
-      for (let i = 0; i < 7; i++) {
-          const d = new Date(startOfWeek);
-          d.setDate(d.getDate() + i);
-          days.push(new Date(d));
-      }
-      const hours = Array.from({length: 11}, (_, i) => i + 8); 
-
-      return (
-          <div style={{display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", border: "1px solid #ddd"}}>
-              <div style={{display: "grid", gridTemplateColumns: "60px repeat(7, 1fr)", background: "#f5f5f5", borderBottom: "1px solid #ddd", position: "sticky", top: 0, zIndex: 10}}>
-                  <div style={{padding: "10px", fontWeight: "bold", borderRight: "1px solid #ddd"}}>Time</div>
-                  {days.map(d => (
-                      <div key={d.toString()} style={{padding: "10px", textAlign: "center", fontWeight: "bold", borderRight: "1px solid #ddd", color: d.getDay() === 6 ? 'red' : 'black', background: normalizeDate(d) === normalizeDate(new Date()) ? "#e3f2fd" : "transparent"}}>
-                          {d.toLocaleDateString('en-US', {weekday: 'short'})} <br/> {d.getDate()}
-                      </div>
-                  ))}
-              </div>
-              {hours.map(h => (
-                  <div key={h} style={{display: "grid", gridTemplateColumns: "60px repeat(7, 1fr)", borderBottom: "1px solid #eee"}}>
-                      <div style={{padding: "10px", fontSize: "12px", borderRight: "1px solid #eee", textAlign: "right", color: "#666"}}>{h}:00</div>
-                      {days.map(d => {
-                          const dateStr = normalizeDate(d); 
-                          const isSaturday = d.getDay() === 6;
-                          const slotAppts = appointments.filter(a => {
-                              if (a.status === 'Cancelled' || a.status === 'Done' || normalizeDate(a.date) !== dateStr) return false;
-                              const apptHour = parseInt(a.time.split(':')[0]);
-                              return apptHour === h;
-                          });
-                          return (
-                              <div key={dateStr + h} style={{borderRight: "1px solid #eee", background: isSaturday ? "#f5f5f5" : "white", padding: "2px", minHeight: "50px", position: "relative"}}>
-                                  {slotAppts.map(a => (
-                                      <div key={a.id} onClick={() => handleCalendarApptClick(a)} style={{background: a.status === 'Pending' ? 'orange' : 'green', color: "white", fontSize: "11px", padding: "4px", borderRadius: "4px", marginBottom: "2px", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.2)"}}>
-                                          {a.time} - {a.petName}
-                                      </div>
-                                  ))}
-                              </div>
-                          );
-                      })}
-                  </div>
-              ))}
-          </div>
-      );
-  };
-
-const getNotifications = () => {
-      let notifs = [];
-      
-      // Filter out appointments that are already marked as read in DB
-      appointments.filter(a => a.status === 'Pending' && !a.read).forEach(a => {
-          notifs.push({ 
-              id: a.id, 
-              type: 'appointment', 
-              subType: 'Pending', 
-              text: `New Request: ${a.petName} (${a.date})`, 
-              date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(), 
-              linkTab: 'appointments', 
-              linkSubTab: 'Pending' 
-          });
-      });
-
-      // Filter out cancelled apps that are read
-      appointments.filter(a => a.status === 'Cancelled' && !a.read).slice(0, 5).forEach(a => {
-          notifs.push({ 
-              id: a.id, 
-              type: 'appointment', 
-              subType: 'Cancelled', 
-              text: `Cancelled: ${a.petName}`, 
-              date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(), 
-              linkTab: 'appointments', 
-              linkSubTab: 'Cancelled' 
-          });
-      });
-
-      // Messages (already have a 'read' field in your DB, so this works fine)
-      const unreadMsgs = allMessages.filter(m => m.senderId !== auth.currentUser.uid && !m.read && m.senderId !== "AI_BOT");
-      const unreadOwners = [...new Set(unreadMsgs.map(m => m.senderId))];
-      
-      unreadOwners.forEach(ownerId => {
-          const owner = owners.find(o => o.id === ownerId);
-          notifs.push({ 
-              id: `msg-${ownerId}`, 
-              type: 'message', 
-              text: `Msg from ${owner ? owner.firstName : 'Client'}`, 
-              date: new Date(), 
-              linkTab: 'messages', 
-              ownerData: owner 
-          });
-      });
-      return notifs.sort((a, b) => b.date - a.date).filter(n => !readNotifIds.includes(n.id));
-  };
-
-  const notificationList = getNotifications();
-  const unreadCount = notificationList.length;
-
-  const handleNotificationClick = (notif) => {
-      setReadNotifIds(prev => [...prev, notif.id]);
-      setActiveTab(notif.linkTab);
-      if (notif.linkSubTab) setApptSubTab(notif.linkSubTab);
-      if (notif.type === 'message' && notif.ownerData) setSelectedChatOwner(notif.ownerData);
-      setShowNotifications(false);
-  };
-  
-const handleMarkAllRead = async () => { const currentIds = notificationList.map(n => n.id);
-    setReadNotifIds(prev => [...prev, ...currentIds]);
-    notificationList.forEach(async (notif) => {
         try {
-              if (notif.type === 'message') {
-                  // For messages, we find all unread messages from that sender
-                  const senderId = notif.id.replace('msg-', '');
-                  const unreadMsgs = allMessages.filter(m => m.senderId === senderId && !m.read);
-                  unreadMsgs.forEach(async (msg) => {
-                      await updateDoc(doc(db, "messages", msg.id), { read: true });
-                  });
-              } else if (notif.type === 'appointment') {
-                  await updateDoc(doc(db, "appointments", notif.id), { read: true });
-              }
-          } catch (err) { console.error("Error marking as read:", err); }
-      });
-  };
+            await updateDoc(doc(db, "appointments", declineModal.apptId), {
+                status: "Cancelled",
+                cancellationReason: declineModal.reason,
+                staffId: auth.currentUser.uid,
+                lastUpdated: new Date()
+            });
+            showToast("Appointment declined.");
+            setDeclineModal({ show: false, apptId: null, reason: "" });
+        } catch (err) {
+            console.error(err);
+            showToast("Error declining appointment.", "error");
+        }
+    };
 
-  const getTabStyle = (name) => ({
-      padding: "15px",
-      fontSize: "1.1rem",
-      cursor: "pointer",
-      border: "none",
-      borderRadius: "12px",
-      background: activeTab === name ? "#2196F3" : "white",
-      color: activeTab === name ? "white" : "#555",
-      boxShadow: activeTab === name ? "0 4px 10px rgba(33, 150, 243, 0.4)" : "0 2px 4px rgba(0,0,0,0.05)",
-      fontWeight: "bold",
-      transition: "all 0.2s",
-      width: "100%",
-      textAlign: "center"
-  });
+    // --- INVENTORY ACTIONS ---
+    const handleOpenAddInventory = () => {
+        setEditingInventoryId(null);
+        setInventoryData({ name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5 });
+        setShowInventoryModal(true);
+    };
 
-  const filteredAppointments = appointments.filter(a => a.status === apptSubTab);
+    const handleOpenEditInventory = (item) => {
+        setEditingInventoryId(item.id);
+        setInventoryData({
+            name: item.name,
+            category: item.category,
+            quantity: item.quantity,
+            unit: item.unit,
+            expiryDate: item.expiryDate || "",
+            threshold: item.threshold || 5
+        });
+        setShowInventoryModal(true);
+    };
 
-  useEffect(() => {
-    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages]);
+    const confirmQuickUsage = async () => {
+        const { item, qty } = usageModal;
+        if (!item || qty <= 0) return;
 
-  return (
-    <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
-      {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({...toast, show: false})} />}
-      
-      <nav className="navbar" style={{ flexShrink: 0 }}>
-        <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Staff</div>
-        <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
-          
-          <div style={{ position: "relative" }}>
-              <button onClick={() => { if (!showNotifications) { handleMarkAllRead (); }
-                
-                setShowNotifications(!showNotifications);
-                 }}
-                style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
-                  🔔{unreadCount > 0 && <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>{unreadCount}</span>}
-              </button>
-              {showNotifications && (
-                  <div style={{ position: "absolute", top: "50px", right: "0", width: "320px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
-                      <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"10px", borderBottom:"1px solid #eee", paddingBottom:"5px"}}>
-                          <h4 style={{ margin: 0 }}>Notifications</h4>
-                          <button onClick={handleMarkAllRead} style={{fontSize:"11px", border:"none", background:"none", color:"#2196F3", cursor:"pointer"}}>Mark all read</button>
-                      </div>
-                      <div style={{ maxHeight: "300px", overflowY: "auto" }}>
-                          {notificationList.length === 0 ? <p style={{color:"#888"}}>No new notifications.</p> : (
-                              notificationList.map((notif, index) => (
-                                  <div key={index} onClick={() => handleNotificationClick(notif)} style={{ padding: "12px", borderBottom: "1px solid #f1f1f1", cursor: "pointer", display: "flex", alignItems: "start", gap: "10px" }}>
-                                      <span style={{ fontSize: "16px" }}>{notif.type === 'appointment' ? '📅' : notif.type === 'message' ? '💬' : '⭐'}</span>
-                                      <div><div style={{ fontSize: "13px", fontWeight: "500", color: "#333" }}>{notif.text}</div></div>
-                                  </div>
-                              )))}
-                      </div>
-                  </div>
-              )}
-          </div>
-          <button onClick={handleLogout} className="action-btn" style={{background: "#ffebee", color: "#d32f2f"}}>Logout</button>
-        </div>
-      </nav>
+        if (item.quantity < qty) {
+            showToast("Not enough stock available", "error");
+            return;
+        }
 
-      <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
-        
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "20px", marginBottom: "20px", flexShrink: 0 }}>
-          <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>Appointments</button>
-          <button style={getTabStyle("records")} onClick={() => setActiveTab("records")}>Pet Records</button>
-          <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}> Messages {totalUnreadMessages > 0 && ( <span style={{background:"red", color:"white", borderRadius:"50%", padding:"2px 8px", fontSize:"12px", marginLeft:"5px"}}> {totalUnreadMessages} </span> )} </button>
-          <button style={getTabStyle("inventory")} onClick={() => setActiveTab("inventory")}>Inventory</button>
-          <button style={getTabStyle("reports")} onClick={() => setActiveTab("reports")}>Reports</button>
-        </div>
+        try {
+            await updateDoc(doc(db, "inventory", item.id), {
+                quantity: item.quantity - qty,
+                lastUpdated: new Date()
+            });
 
-        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+            await addDoc(collection(db, "inventoryLogs"), {
+                itemId: item.id,
+                itemName: item.name,
+                change: -qty,
+                reason: "Quick Usage",
+                timestamp: new Date()
+            });
+            showToast(`Recorded usage of ${qty} ${item.unit}`);
+            setUsageModal({ show: false, item: null, qty: 1 });
+        } catch (err) {
+            console.error(err);
+            showToast("Error updating stock", "error");
+        }
+    };
+
+    const handleSaveInventory = async (e) => {
+        e.preventDefault();
+        if (isSavingInventory) return;
+
+        // Check if reason is provided
+        if (!updateReason.trim()) {
+            return showToast("Please provide a reason for the Admin.", "error");
+        }
+
+        setIsSavingInventory(true);
+
+        try {
+            // UPDATED: Create a request in "edit_requests" collection
+            // Instead of direct update, we send the new data to Admin
             
-            {/* --- APPOINTMENTS TAB --- */}
-            {activeTab === "appointments" && (
-                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", paddingBottom: "10px", borderBottom: "1px solid #eee", flexShrink: 0 }}>
-                        <h3>Appointments Management</h3>
-                        <div style={{display:"flex", gap:"10px"}}>
-                            <button onClick={() => setShowWalkInModal(true)} style={{background:"#673AB7", color:"white", border:"none", padding:"8px 15px", borderRadius:"20px", cursor:"pointer", fontWeight: "bold"}}>+ Walk-In</button>
-                            <div style={{display:"flex", background:"#f1f1f1", borderRadius:"20px", padding:"2px"}}>
-                                <button onClick={() => {setApptViewMode("list")}} style={{background: apptViewMode === 'list' ? "white" : "transparent", color: apptViewMode==='list'?"black":"#777", border:"none", borderRadius:"18px", padding:"6px 15px", cursor:"pointer", boxShadow: apptViewMode==='list'?"0 2px 4px rgba(0,0,0,0.1)":"none"}}>List</button>
-                                <button onClick={() => {setApptViewMode("calendar")}} style={{background: apptViewMode === 'calendar' ? "white" : "transparent", color: apptViewMode==='calendar'?"black":"#777", border:"none", borderRadius:"18px", padding:"6px 15px", cursor:"pointer", boxShadow: apptViewMode==='calendar'?"0 2px 4px rgba(0,0,0,0.1)":"none"}}>Calendar</button>
-                            </div>
-                        </div>
-                    </div>
+            // Get original data if editing
+            let originalData = {};
+            if (editingInventoryId) {
+                const item = inventory.find(i => i.id === editingInventoryId);
+                if (item) originalData = { ...item };
+            }
 
-                    {apptViewMode === 'calendar' ? (
-                        <div style={{flex: 1, display: "flex", flexDirection: "column", overflow: "hidden"}}>
-                            <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px", background:"#f8f9fa", padding:"10px", borderRadius:"8px", flexShrink: 0}}>
-                                <div style={{display:"flex", gap:"10px"}}>
-                                    <button onClick={() => setCalendarView("month")} style={{background: calendarView === 'month' ? "#2196F3" : "white", color: calendarView === 'month' ? "white" : "#333", border: "1px solid #ddd", padding: "5px 15px", borderRadius: "5px"}}>Month</button>
-                                    <button onClick={() => setCalendarView("week")} style={{background: calendarView === 'week' ? "#2196F3" : "white", color: calendarView === 'week' ? "white" : "#333", border: "1px solid #ddd", padding: "5px 15px", borderRadius: "5px"}}>Week</button>
-                                </div>
-                                <div style={{display:"flex", alignItems:"center", gap:"15px"}}>
-                                    <button onClick={() => handleDateNavigate(-1)} style={{background:"white", border:"1px solid #ddd", borderRadius:"50%", width:"30px", height:"30px", cursor:"pointer"}}>&lt;</button>
-                                    <h3 style={{margin:0, width:"180px", textAlign:"center"}}>{calendarView === 'month' ? currentDate.toLocaleString('default', { month: 'long', year: 'numeric' }) : `Week of ${getStartOfWeek(currentDate).toLocaleDateString()}`}</h3>
-                                    <button onClick={() => handleDateNavigate(1)} style={{background:"white", border:"1px solid #ddd", borderRadius:"50%", width:"30px", height:"30px", cursor:"pointer"}}>&gt;</button>
-                                </div>
-                                <button onClick={() => setCurrentDate(new Date())} style={{fontSize:"12px", background:"none", border:"1px solid #2196F3", color:"#2196F3", padding:"5px 10px", borderRadius:"5px"}}>Today</button>
+            await addDoc(collection(db, "edit_requests"), {
+                type: "inventory",
+                itemId: editingInventoryId || null, // null if it's a new item request
+                itemName: inventoryData.name,
+                originalData: originalData,
+                newData: { ...inventoryData },
+                reason: updateReason,
+                status: "pending",
+                requestedBy: auth.currentUser.email,
+                createdAt: new Date()
+            });
+
+            showToast("Update Request sent to Admin for approval!", "success");
+            setShowInventoryModal(false);
+            setUpdateReason(""); 
+        } catch (err) {
+            console.error(err);
+            showToast("Error sending request.", "error");
+        } finally {
+            setIsSavingInventory(false);
+        }
+    };
+
+    const handleRegisterOwner = async (e) => {
+        e.preventDefault();
+        const nameRegex = /^[A-Za-z\s]+$/;
+
+        const trimmedFirstName = registerData.firstName.trim();
+        const trimmedLastName = registerData.lastName.trim();
+
+        // 1. Strict Name Validation
+        if (!nameRegex.test(trimmedFirstName)) {
+            return setRegisterError("First Name must only contain letters (no numbers or symbols).");
+        }
+        if (!nameRegex.test(trimmedLastName)) {
+            return setRegisterError("Last Name must only contain letters (no numbers or symbols).");
+        }
+
+        // 2. Password Match Validation
+        if (registerData.password !== registerData.confirmPassword) {
+            return setRegisterError("Passwords do not match.");
+        }
+
+        setRegisterLoading(true);
+        setRegisterError("");
+
+        try {
+            // 1. Create the User Account in Firebase Auth
+            const userCredential = await createUserWithEmailAndPassword(auth, registerData.email, registerData.password);
+            const newUser = userCredential.user;
+
+            // 2. Save Owner Profile to "users" collection
+            await setDoc(doc(db, "users", newUser.uid), {
+                firstName: trimmedFirstName,
+                lastName: trimmedLastName,
+                email: registerData.email,
+                role: "owner",
+                createdAt: new Date()
+            });
+
+            // 3. Save Pet Details to "pets" collection
+            const petDocRef = await addDoc(collection(db, "pets"), {
+                ownerId: newUser.uid,
+                name: registerData.petName.trim(),
+                species: registerData.species,
+                breed: registerData.breed === "Other" ? registerData.otherBreed : registerData.breed,
+                age: registerData.age,
+                ageUnit: registerData.ageUnit,
+                gender: registerData.gender,
+                medicalHistory: registerData.medicalHistory,
+                isArchived: false,
+                createdAt: new Date()
+            });
+
+            // 4. Update Walk-In Form state
+            if (typeof setWalkInData === "function") {
+                setWalkInData(prev => ({
+                    ...prev,
+                    ownerId: newUser.uid,
+                    petId: petDocRef.id
+                }));
+            }
+
+            if (typeof showToast === "function") {
+                showToast("Owner and Pet registered successfully!", "success");
+            }
+
+            setShowRegisterModal(false);
+
+            setRegisterData({
+                firstName: "", lastName: "", email: "", password: "", confirmPassword: "",
+                petName: "", species: "Dog", breed: "", otherBreed: "",
+                age: "", ageUnit: "Years", gender: "Male", medicalHistory: ""
+            });
+
+        } catch (err) {
+            console.error("Registration Error:", err);
+            if (err.code === "auth/email-already-in-use") {
+                setRegisterError("This email is already in use.");
+            } else if (err.code === "auth/weak-password") {
+                setRegisterError("Password should be at least 6 characters.");
+            } else {
+                setRegisterError("Failed to register: " + err.message);
+            }
+        } finally {
+            setRegisterLoading(false);
+        }
+    };
+
+    const handleCalendarApptClick = (appt) => {
+        setApptSubTab(appt.status);
+        setApptViewMode("list");
+    };
+
+    const openConsultModal = (apptId) => {
+        setSelectedApptId(apptId);
+        const appt = appointments.find(a => a.id === apptId);
+        const scheduledDate = normalizeDate(appt.date);
+        const existingSymptoms = appt.symptoms ? appt.symptoms.split(", ") : [];
+
+        setConsultData({
+            date: scheduledDate || new Date().toISOString().split('T')[0],
+            reason: appt.reason || "",
+            symptoms: existingSymptoms,
+            diagnosis: appt.diagnosis || "",
+            medicine: appt.medicine || "",
+            notes: appt.notes || "",
+            followUp: ""
+        });
+        setShowConsultModal(true);
+    };
+
+    // --- RE-ADDED MISSING FUNCTION WRAPPER HERE ---
+    const handleFinishConsultation = async (e) => {
+        e.preventDefault();
+
+        // 1. Validation for Symptoms
+        if (consultData.symptoms.length === 0) {
+            return showToast("Please select at least one symptom.", "error");
+        }
+        if (consultData.symptoms.includes("Other") && !consultData.otherSymptom.trim()) {
+            return showToast("Please specify the other symptoms.", "error");
+        }
+
+        // 2. Validation for Diagnosis
+        if (!consultData.diagnosis) {
+            return showToast("Please select a diagnosis.", "error");
+        }
+        if (consultData.diagnosis === "Other" && !consultData.otherDiagnosis.trim()) {
+            return showToast("Please specify the diagnosis.", "error");
+        }
+
+        // 3. Validation for Medicine
+        if (!consultData.medicineId) {
+            return showToast("Please select a treatment or 'Other'.", "error");
+        }
+        if (consultData.medicineId === "Other" && !consultData.otherMedicine?.trim()) {
+            return showToast("Please specify the treatment/medicine details.", "error");
+        }
+
+        // Prepare Final Strings
+        const finalSymptoms = consultData.symptoms.includes("Other")
+            ? [...consultData.symptoms.filter(s => s !== "Other"), `Other: ${consultData.otherSymptom.trim()}`]
+            : consultData.symptoms;
+
+        const finalDiagnosis = consultData.diagnosis === "Other"
+            ? `Other: ${consultData.otherDiagnosis.trim()}`
+            : consultData.diagnosis;
+
+        const finalMedicineName = consultData.medicineId === "Other"
+            ? consultData.otherMedicine.trim()
+            : consultData.medicineName;
+
+        setRegisterLoading(true);
+
+        try {
+            // --- MODIFIED STOCK LOGIC ---
+            if (consultData.medicineId && consultData.medicineId !== "Other" && consultData.dispenseItem) {
+                const itemRef = doc(db, "inventory", consultData.medicineId);
+                const item = inventory.find(i => i.id === consultData.medicineId);
+
+                if (!item || item.quantity < 1) {
+                    setRegisterLoading(false);
+                    return showToast("Medicine selected is out of stock.", "error");
+                }
+
+                await updateDoc(itemRef, {
+                    quantity: Number(item.quantity) - 1,
+                    lastUpdated: new Date()
+                });
+
+                await addDoc(collection(db, "inventoryLogs"), {
+                    itemId: consultData.medicineId,
+                    itemName: item.name,
+                    change: -1,
+                    reason: `Dispensed during Consultation (Appt: ${selectedApptId})`,
+                    timestamp: new Date()
+                });
+            }
+
+            // 5. Update Appointment Record
+            await updateDoc(doc(db, "appointments", selectedApptId), {
+                status: "Approved",
+                isCompleted: true,
+                consultationDate: consultData.date,
+                symptoms: finalSymptoms.join(", "),
+                diagnosis: finalDiagnosis,
+                medicine: finalMedicineName,
+                notes: consultData.notes,
+                followUpDate: consultData.followUp,
+                staffId: auth.currentUser.uid,
+                completedAt: new Date()
+            });
+
+            showToast("Consultation Completed!", "success");
+            setShowConsultModal(false);
+
+            setConsultData({
+                date: new Date().toISOString().split('T')[0],
+                reason: "", symptoms: [], otherSymptom: "",
+                diagnosis: "", otherDiagnosis: "",
+                medicineId: "", medicineName: "", otherMedicine: "",
+                notes: "", followUp: "", dispenseItem: true
+            });
+
+        } catch (err) {
+            console.error("Consultation Error:", err);
+            showToast("Error: " + err.message, "error");
+        } finally {
+            setRegisterLoading(false);
+        }
+    };
+
+    const handleStartEdit = (msg) => { setEditingMessageId(msg.id); setChatInput(msg.text); };
+    const handleCancelEdit = () => { setEditingMessageId(null); setChatInput(""); };
+
+    const handleSendMessage = async (e) => {
+        e.preventDefault();
+        if (!chatInput.trim() || !selectedChatOwner) return;
+
+        if (isSendingMessage) return;
+        setIsSendingMessage(true);
+
+        try {
+            if (editingMessageId) {
+                await updateDoc(doc(db, "messages", editingMessageId), { text: chatInput, isEdited: true });
+                setEditingMessageId(null);
+            } else {
+                await addDoc(collection(db, "messages"), {
+                    text: chatInput, senderId: auth.currentUser.uid, senderName: "Staff", receiverId: selectedChatOwner.id, createdAt: new Date(), participants: [auth.currentUser.uid, selectedChatOwner.id], type: "chat", read: false
+                });
+            }
+            setChatInput("");
+        } catch (error) {
+            console.error("Error sending message:", error);
+        } finally {
+            setIsSendingMessage(false);
+        }
+    };
+
+    const handleLogout = () => {
+        setConfirmModal({
+            show: true, message: "Are you sure want to log out?", onConfirm: async () => {
+                await signOut(auth); navigate("/");
+            }
+        });
+    };
+
+    const handleSymptomChange = (sym) => {
+        setConsultData(prev => {
+            const isSelected = prev.symptoms.includes(sym);
+            let newSymptoms;
+
+            if (isSelected) {
+                newSymptoms = prev.symptoms.filter(s => s !== sym);
+            } else {
+                newSymptoms = [...prev.symptoms, sym];
+            }
+
+            return {
+                ...prev,
+                symptoms: newSymptoms,
+                otherSymptom: !isSelected && sym === "Other" ? prev.otherSymptom : (sym === "Other" ? "" : prev.otherSymptom)
+            };
+        });
+    };
+
+    const handleCreateWalkIn = async (e) => {
+        e.preventDefault();
+        const selectedDate = new Date(walkInData.date);
+        if (selectedDate.getDay() === 6) return showToast("Cannot book on Saturdays. Clinic is closed.", "error");
+
+        const qConflict = query(collection(db, "appointments"), where("date", "==", walkInData.date), where("time", "==", walkInData.time));
+        const snapshot = await getDocs(qConflict);
+        const hasConflict = snapshot.docs.some(doc => doc.data().status !== "Cancelled");
+
+        if (hasConflict) {
+            return showToast(`Time slot ${walkInData.time} is already booked!`, "error");
+        }
+
+        try {
+            await addDoc(collection(db, "appointments"), {
+                ownerId: walkInData.ownerId,
+                petId: walkInData.petId,
+                petName: walkInData.petName,
+                date: walkInData.date,
+                time: walkInData.time,
+                reason: walkInData.reason,
+                status: "Approved",
+                type: "walk-in",
+                createdAt: new Date(),
+                staffId: auth.currentUser.uid
+            });
+            showToast("Walk-in appointment created successfully!");
+            setShowWalkInModal(false);
+            setWalkInData({ ownerId: "", petId: "", petName: "", date: "", time: "", reason: "" });
+        } catch (err) {
+            console.error(err);
+            showToast("Error creating appointment.", "error");
+        }
+    };
+
+    // --- CALENDAR LOGIC ---
+    const handleDateNavigate = (direction) => {
+        const newDate = new Date(currentDate);
+        if (calendarView === 'month') newDate.setMonth(newDate.getMonth() + direction);
+        else newDate.setDate(newDate.getDate() + (direction * 7));
+        setCurrentDate(newDate);
+    };
+
+    const getStartOfWeek = (date) => {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day;
+        return new Date(d.setDate(diff));
+    };
+
+    const renderMonthView = () => {
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const firstDayOfMonth = new Date(year, month, 1).getDay();
+
+        const cells = [];
+        for (let i = 0; i < firstDayOfMonth; i++) cells.push(<div key={`empty-${i}`} style={{ background: "#f9f9f9", border: "1px solid #eee" }}></div>);
+
+        for (let d = 1; d <= daysInMonth; d++) {
+            const currentCellDate = new Date(year, month, d);
+            const dateStr = normalizeDate(currentCellDate);
+            const isToday = normalizeDate(new Date()) === dateStr;
+            const isSaturday = currentCellDate.getDay() === 6;
+
+            // --- FILTER: exclude cancelled, done, and completed appointments ---
+            const dayAppts = appointments.filter(a => normalizeDate(a.date) === dateStr && a.status !== "Cancelled" && a.status !== "Done" && !a.isCompleted);
+
+            cells.push(
+                <div key={d} style={{ minHeight: "80px", background: isSaturday ? "#eeeeee" : (isToday ? "#e3f2fd" : "white"), border: "1px solid #eee", padding: "5px", opacity: isSaturday ? 0.6 : 1 }}>
+                    <div style={{ fontWeight: "bold", color: isSaturday ? "red" : (isToday ? "#1565C0" : "#333") }}>{d} {isSaturday && ""}</div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px", maxHeight: "60px", overflowY: "auto" }}>
+                        {dayAppts.map(a => (
+                            <div key={a.id} onClick={() => handleCalendarApptClick(a)} style={{ background: a.status === 'Pending' ? 'orange' : 'green', color: "white", padding: "2px", borderRadius: "3px", fontSize: "10px", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", cursor: "pointer" }}>
+                                {a.time} {a.petName}
                             </div>
-                            <div style={{flex: 1, overflowY: "auto", display: "flex", flexDirection: "column"}}>
-                                {calendarView === 'month' ? (<><div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", marginBottom: "5px" }}>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} style={{textAlign:"center", fontWeight:"bold", padding:"5px", color: d === 'Sat' ? 'red' : 'black'}}>{d}</div>)}</div>{renderMonthView()}</>) : (renderWeekView())}
-                            </div>
-                            <div style={{marginTop:"10px", fontSize:"12px", color:"#555", display:"flex", gap:"15px", flexShrink: 0}}>
-                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"orange", borderRadius:"2px"}}></div> Pending</span>
-                                <span style={{display:"flex", alignItems:"center", gap:"5px"}}><div style={{width:"10px", height:"10px", background:"green", borderRadius:"2px"}}></div> Approved/Done</span>
-                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+        return <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", flex: 1, overflowY: "auto" }}>{cells}</div>;
+    };
+
+    const renderWeekView = () => {
+        const startOfWeek = getStartOfWeek(currentDate);
+        const days = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(startOfWeek);
+            d.setDate(d.getDate() + i);
+            days.push(new Date(d));
+        }
+        const hours = Array.from({ length: 11 }, (_, i) => i + 8);
+
+        return (
+            <div style={{ display: "flex", flexDirection: "column", height: "100%", overflowY: "auto", border: "1px solid #ddd" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "60px repeat(7, 1fr)", background: "#f5f5f5", borderBottom: "1px solid #ddd", position: "sticky", top: 0, zIndex: 10 }}>
+                    <div style={{ padding: "10px", fontWeight: "bold", borderRight: "1px solid #ddd" }}>Time</div>
+                    {days.map(d => (
+                        <div key={d.toString()} style={{ padding: "10px", textAlign: "center", fontWeight: "bold", borderRight: "1px solid #ddd", color: d.getDay() === 6 ? 'red' : 'black', background: normalizeDate(d) === normalizeDate(new Date()) ? "#e3f2fd" : "transparent" }}>
+                            {d.toLocaleDateString('en-US', { weekday: 'short' })} <br /> {d.getDate()}
                         </div>
-                    ) : (
-                        <div style={{display: "flex", flexDirection: "column", height: "100%", overflow: "hidden"}}>
-                            <div style={{ display: "flex", gap: "10px", marginBottom: "15px", overflowX: "auto", paddingBottom: "5px", flexShrink: 0 }}>
-                                {["Approved", "Pending", "Done", "Cancelled"].map(status => (
-                                    <button key={status} onClick={() => setApptSubTab(status)} style={{ padding: "8px 15px", border: "1px solid #ddd", borderRadius: "20px", background: apptSubTab === status ? "#2196F3" : "white", color: apptSubTab === status ? "white" : "#333", cursor: "pointer", transition: "all 0.2s" }}>{status}</button>
-                                ))}
-                            </div>
-                            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
-                                {filteredAppointments.length === 0 ? <p style={{ textAlign: "center", color: "#888", marginTop: "20px" }}>No {apptSubTab.toLowerCase()} appointments.</p> : (
-                                    filteredAppointments.map(appt => (
-                                        <div key={appt.id} className="list-item" style={{display:"flex", justifyContent:"space-between", alignItems:"center"}}>
-                                            <div>
-                                                <div style={{fontWeight:"bold", fontSize:"16px"}}>{appt.petName} <span style={{fontSize:"12px", color:"#666", fontWeight:"normal"}}>({appt.type || 'Regular'})</span></div>
-                                                <div style={{fontSize:"12px", color:"#555"}}>{appt.date} at {appt.time}</div>
-                                                <div style={{fontSize:"11px", color:"#777"}}>Reason: {appt.reason}</div>
-                                            </div>
-                                            <div style={{display:"flex", gap:"10px"}}>
-                                                {appt.status === "Pending" && (
-                                                    <>
-                                                        <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{background:"#4CAF50"}}>Approve</button>
-                                                        <button onClick={() => openDeclineModal(appt.id)} className="action-btn" style={{background:"#f44336"}}>Decline</button>
-                                                    </>
-                                                )}
-                                                {appt.status === "Approved" && (
-                                                    <>
-                                                        <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{background:"#2196F3", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500", transition: "background 0.2s"}}>Consultation</button>
-                                                        <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{background:"#f44336", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500", transition: "background 0.2s"}}>Cancel</button>
-                                                    </>
-                                                )}
-                                            </div>
+                    ))}
+                </div>
+                {hours.map(h => (
+                    <div key={h} style={{ display: "grid", gridTemplateColumns: "60px repeat(7, 1fr)", borderBottom: "1px solid #eee" }}>
+                        <div style={{ padding: "10px", fontSize: "12px", borderRight: "1px solid #eee", textAlign: "right", color: "#666" }}>{h}:00</div>
+                        {days.map(d => {
+                            const dateStr = normalizeDate(d);
+                            const isSaturday = d.getDay() === 6;
+                            const slotAppts = appointments.filter(a => {
+                                // --- FILTER: exclude cancelled, done, and completed appointments ---
+                                if (a.status === 'Cancelled' || a.status === 'Done' || a.isCompleted || normalizeDate(a.date) !== dateStr) return false;
+                                const apptHour = parseInt(a.time.split(':')[0]);
+                                return apptHour === h;
+                            });
+                            return (
+                                <div key={dateStr + h} style={{ borderRight: "1px solid #eee", background: isSaturday ? "#f5f5f5" : "white", padding: "2px", minHeight: "50px", position: "relative" }}>
+                                    {slotAppts.map(a => (
+                                        <div key={a.id} onClick={() => handleCalendarApptClick(a)} style={{ background: a.status === 'Pending' ? 'orange' : 'green', color: "white", fontSize: "11px", padding: "4px", borderRadius: "4px", marginBottom: "2px", cursor: "pointer", boxShadow: "0 1px 2px rgba(0,0,0,0.2)" }}>
+                                            {a.time} - {a.petName}
                                         </div>
-                                    ))
+                                    ))}
+                                </div>
+                            );
+                        })}
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
+    const getNotifications = () => {
+        let notifs = [];
+
+        // Filter out appointments that are already marked as read in DB
+        appointments.filter(a => a.status === 'Pending' && !a.read).forEach(a => {
+            notifs.push({
+                id: a.id,
+                type: 'appointment',
+                subType: 'Pending',
+                text: `New Request: ${a.petName} (${a.date})`,
+                date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(),
+                linkTab: 'appointments',
+                linkSubTab: 'Pending'
+            });
+        });
+
+        // Filter out cancelled apps that are read
+        appointments.filter(a => a.status === 'Cancelled' && !a.read).slice(0, 5).forEach(a => {
+            notifs.push({
+                id: a.id,
+                type: 'appointment',
+                subType: 'Cancelled',
+                text: `Cancelled: ${a.petName}`,
+                date: a.createdAt?.toDate ? a.createdAt.toDate() : new Date(),
+                linkTab: 'appointments',
+                linkSubTab: 'Cancelled'
+            });
+        });
+
+        // Messages
+        const unreadMsgs = allMessages.filter(m => m.senderId !== auth.currentUser.uid && !m.read && m.senderId !== "AI_BOT");
+        const unreadOwners = [...new Set(unreadMsgs.map(m => m.senderId))];
+
+        unreadOwners.forEach(ownerId => {
+            const owner = owners.find(o => o.id === ownerId);
+            notifs.push({
+                id: `msg-${ownerId}`,
+                type: 'message',
+                text: `Msg from ${owner ? owner.firstName : 'Client'}`,
+                date: new Date(),
+                linkTab: 'messages',
+                ownerData: owner
+            });
+        });
+        return notifs.sort((a, b) => b.date - a.date).filter(n => !readNotifIds.includes(n.id));
+    };
+
+    const notificationList = getNotifications();
+    const unreadCount = notificationList.length;
+
+    const handleNotificationClick = (notif) => {
+        setReadNotifIds(prev => [...prev, notif.id]);
+        setActiveTab(notif.linkTab);
+        if (notif.linkSubTab) setApptSubTab(notif.linkSubTab);
+        if (notif.type === 'message' && notif.ownerData) setSelectedChatOwner(notif.ownerData);
+        setShowNotifications(false);
+    };
+
+    const handleMarkAllRead = async () => {
+        const currentIds = notificationList.map(n => n.id);
+        setReadNotifIds(prev => [...prev, ...currentIds]);
+        notificationList.forEach(async (notif) => {
+            try {
+                if (notif.type === 'message') {
+                    // For messages, we find all unread messages from that sender
+                    const senderId = notif.id.replace('msg-', '');
+                    const unreadMsgs = allMessages.filter(m => m.senderId === senderId && !m.read);
+                    unreadMsgs.forEach(async (msg) => {
+                        await updateDoc(doc(db, "messages", msg.id), { read: true });
+                    });
+                } else if (notif.type === 'appointment') {
+                    await updateDoc(doc(db, "appointments", notif.id), { read: true });
+                }
+            } catch (err) { console.error("Error marking as read:", err); }
+        });
+    };
+
+    const getTabStyle = (name) => ({
+        padding: "15px",
+        fontSize: "1.1rem",
+        cursor: "pointer",
+        border: "none",
+        borderRadius: "12px",
+        background: activeTab === name ? "#2196F3" : "white",
+        color: activeTab === name ? "white" : "#555",
+        boxShadow: activeTab === name ? "0 4px 10px rgba(33, 150, 243, 0.4)" : "0 2px 4px rgba(0,0,0,0.05)",
+        fontWeight: "bold",
+        transition: "all 0.2s",
+        width: "100%",
+        textAlign: "center"
+    });
+
+    const filteredAppointments = appointments.filter(a => a.status === apptSubTab);
+
+    useEffect(() => {
+        scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [chatMessages]);
+
+    return (
+        <div className="dashboard-container" style={{ height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", background: "#f5f5f5" }}>
+            {toast.show && <Toast message={toast.message} type={toast.type} onClose={() => setToast({ ...toast, show: false })} />}
+
+            <nav className="navbar" style={{ flexShrink: 0 }}>
+                <div className="logo"><img src={logoImg} alt="PawPals" className="logo-img" /> PawPals Staff</div>
+                <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
+
+                    <div style={{ position: "relative" }}>
+                        <button onClick={() => {
+                            if (!showNotifications) { handleMarkAllRead(); }
+
+                            setShowNotifications(!showNotifications);
+                        }}
+                            style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
+                            🔔{unreadCount > 0 && <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>{unreadCount}</span>}
+                        </button>
+                        {showNotifications && (
+                            <div style={{ position: "absolute", top: "50px", right: "0", width: "320px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>
+                                    <h4 style={{ margin: 0 }}>Notifications</h4>
+                                    <button onClick={handleMarkAllRead} style={{ fontSize: "11px", border: "none", background: "none", color: "#2196F3", cursor: "pointer" }}>Mark all read</button>
+                                </div>
+                                <div style={{ maxHeight: "300px", overflowY: "auto" }}>
+                                    {notificationList.length === 0 ? <p style={{ color: "#888" }}>No new notifications.</p> : (
+                                        notificationList.map((notif, index) => (
+                                            <div key={index} onClick={() => handleNotificationClick(notif)} style={{ padding: "12px", borderBottom: "1px solid #f1f1f1", cursor: "pointer", display: "flex", alignItems: "start", gap: "10px" }}>
+                                                <span style={{ fontSize: "16px" }}>{notif.type === 'appointment' ? '📅' : notif.type === 'message' ? '💬' : '⭐'}</span>
+                                                <div><div style={{ fontSize: "13px", fontWeight: "500", color: "#333" }}>{notif.text}</div></div>
+                                            </div>
+                                        )))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                    <button onClick={handleLogout} className="action-btn" style={{ background: "#ffebee", color: "#d32f2f" }}>Logout</button>
+                </div>
+            </nav>
+
+            <main className="main-content" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "20px", maxWidth: "1200px", margin: "0 auto", width: "100%", boxSizing: "border-box" }}>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "20px", marginBottom: "20px", flexShrink: 0 }}>
+                    <button style={getTabStyle("appointments")} onClick={() => setActiveTab("appointments")}>Appointments</button>
+                    <button style={getTabStyle("records")} onClick={() => setActiveTab("records")}>Pet Records</button>
+                    <button style={getTabStyle("messages")} onClick={() => setActiveTab("messages")}> Messages {totalUnreadMessages > 0 && (<span style={{ background: "red", color: "white", borderRadius: "50%", padding: "2px 8px", fontSize: "12px", marginLeft: "5px" }}> {totalUnreadMessages} </span>)} </button>
+                    <button style={getTabStyle("inventory")} onClick={() => setActiveTab("inventory")}>Inventory</button>
+                    <button style={getTabStyle("reports")} onClick={() => setActiveTab("reports")}>Reports</button>
+                </div>
+
+                <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+
+                    {/* --- APPOINTMENTS TAB --- */}
+                    {activeTab === "appointments" && (
+                        <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", paddingBottom: "10px", borderBottom: "1px solid #eee", flexShrink: 0 }}>
+                                <h3>Appointments Management</h3>
+                                <div style={{ display: "flex", gap: "10px" }}>
+                                    <button onClick={() => setShowWalkInModal(true)} style={{ background: "#673AB7", color: "white", border: "none", padding: "8px 15px", borderRadius: "20px", cursor: "pointer", fontWeight: "bold" }}>+ Walk-In</button>
+                                    <div style={{ display: "flex", background: "#f1f1f1", borderRadius: "20px", padding: "2px" }}>
+                                        <button onClick={() => { setApptViewMode("list") }} style={{ background: apptViewMode === 'list' ? "white" : "transparent", color: apptViewMode === 'list' ? "black" : "#777", border: "none", borderRadius: "18px", padding: "6px 15px", cursor: "pointer", boxShadow: apptViewMode === 'list' ? "0 2px 4px rgba(0,0,0,0.1)" : "none" }}>List</button>
+                                        <button onClick={() => { setApptViewMode("calendar") }} style={{ background: apptViewMode === 'calendar' ? "white" : "transparent", color: apptViewMode === 'calendar' ? "black" : "#777", border: "none", borderRadius: "18px", padding: "6px 15px", cursor: "pointer", boxShadow: apptViewMode === 'calendar' ? "0 2px 4px rgba(0,0,0,0.1)" : "none" }}>Calendar</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {apptViewMode === 'calendar' ? (
+                                <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px", background: "#f8f9fa", padding: "10px", borderRadius: "8px", flexShrink: 0 }}>
+                                        <div style={{ display: "flex", gap: "10px" }}>
+                                            <button onClick={() => setCalendarView("month")} style={{ background: calendarView === 'month' ? "#2196F3" : "white", color: calendarView === 'month' ? "white" : "#333", border: "1px solid #ddd", padding: "5px 15px", borderRadius: "5px" }}>Month</button>
+                                            <button onClick={() => setCalendarView("week")} style={{ background: calendarView === 'week' ? "#2196F3" : "white", color: calendarView === 'week' ? "white" : "#333", border: "1px solid #ddd", padding: "5px 15px", borderRadius: "5px" }}>Week</button>
+                                        </div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "15px" }}>
+                                            <button onClick={() => handleDateNavigate(-1)} style={{ background: "white", border: "1px solid #ddd", borderRadius: "50%", width: "30px", height: "30px", cursor: "pointer" }}>&lt;</button>
+                                            <h3 style={{ margin: 0, width: "180px", textAlign: "center" }}>{calendarView === 'month' ? currentDate.toLocaleString('default', { month: 'long', year: 'numeric' }) : `Week of ${getStartOfWeek(currentDate).toLocaleDateString()}`}</h3>
+                                            <button onClick={() => handleDateNavigate(1)} style={{ background: "white", border: "1px solid #ddd", borderRadius: "50%", width: "30px", height: "30px", cursor: "pointer" }}>&gt;</button>
+                                        </div>
+                                        <button onClick={() => setCurrentDate(new Date())} style={{ fontSize: "12px", background: "none", border: "1px solid #2196F3", color: "#2196F3", padding: "5px 10px", borderRadius: "5px" }}>Today</button>
+                                    </div>
+                                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+                                        {calendarView === 'month' ? (<><div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "5px", marginBottom: "5px" }}>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => <div key={d} style={{ textAlign: "center", fontWeight: "bold", padding: "5px", color: d === 'Sat' ? 'red' : 'black' }}>{d}</div>)}</div>{renderMonthView()}</>) : (renderWeekView())}
+                                    </div>
+                                    <div style={{ marginTop: "10px", fontSize: "12px", color: "#555", display: "flex", gap: "15px", flexShrink: 0 }}>
+                                        <span style={{ display: "flex", alignItems: "center", gap: "5px" }}><div style={{ width: "10px", height: "10px", background: "orange", borderRadius: "2px" }}></div> Pending</span>
+                                        <span style={{ display: "flex", alignItems: "center", gap: "5px" }}><div style={{ width: "10px", height: "10px", background: "green", borderRadius: "2px" }}></div> Approved/Done</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+                                    {/* 1. Main Status Tabs */}
+                                    <div style={{ display: "flex", gap: "10px", marginBottom: "15px", overflowX: "auto", paddingBottom: "5px", flexShrink: 0 }}>
+                                        {["Approved", "Pending", "Cancelled"].map(status => (
+                                            <button key={status} onClick={() => setApptSubTab(status)} style={{ padding: "8px 15px", border: "1px solid #ddd", borderRadius: "20px", background: apptSubTab === status ? "#2196F3" : "white", color: apptSubTab === status ? "white" : "#333", cursor: "pointer", transition: "all 0.2s" }}>{status}</button>
+                                        ))}
+                                    </div>
+
+                                    {/* 2. Sub-Tabs for "Approved" (Active vs Completed) */}
+                                    {apptSubTab === "Approved" && (
+                                        <div style={{ display: "flex", gap: "10px", marginBottom: "10px", paddingLeft: "5px" }}>
+                                            <button onClick={() => setApprovedFilter("Active")}
+                                                style={{ fontSize: "12px", padding: "5px 12px", borderRadius: "15px", border: "none", cursor: "pointer", background: approvedFilter === "Active" ? "#e3f2fd" : "transparent", color: approvedFilter === "Active" ? "#1565C0" : "#666", fontWeight: "bold" }}>
+                                                Active
+                                            </button>
+                                            <button onClick={() => setApprovedFilter("Completed")}
+                                                style={{ fontSize: "12px", padding: "5px 12px", borderRadius: "15px", border: "none", cursor: "pointer", background: approvedFilter === "Completed" ? "#e3f2fd" : "transparent", color: approvedFilter === "Completed" ? "#1565C0" : "#666", fontWeight: "bold" }}>
+                                                Completed
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    {/* 3. Filtered List Logic */}
+                                    <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
+                                        {(() => {
+                                            // Filter Logic: If Approved, split by isCompleted. Else, show all (for Pending/Cancelled).
+                                            let displayAppts = filteredAppointments;
+                                            if (apptSubTab === "Approved") {
+                                                displayAppts = filteredAppointments.filter(a =>
+                                                    approvedFilter === "Active" ? !a.isCompleted : a.isCompleted
+                                                );
+                                            }
+
+                                            if (displayAppts.length === 0) {
+                                                return <p style={{ textAlign: "center", color: "#888", marginTop: "20px" }}>No {apptSubTab === "Approved" ? approvedFilter.toLowerCase() : apptSubTab.toLowerCase()} appointments.</p>;
+                                            }
+
+                                            return displayAppts.map(appt => (
+                                                <div key={appt.id} className="list-item" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "white", padding: "15px", borderRadius: "8px", border: "1px solid #eee" }}>
+                                                    <div>
+                                                        <div style={{ fontWeight: "bold", fontSize: "16px" }}>
+                                                            {appt.petName}
+                                                            <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}> ({appt.type || 'Regular'})</span>
+                                                            {/* Visual tag for Completed items */}
+                                                            {appt.isCompleted && <span style={{ marginLeft: "8px", fontSize: "10px", background: "#4CAF50", color: "white", padding: "2px 6px", borderRadius: "4px" }}>DONE</span>}
+                                                        </div>
+                                                        <div style={{ fontSize: "12px", color: "#555" }}>{appt.date} at {appt.time}</div>
+                                                        <div style={{ fontSize: "11px", color: "#777" }}>Reason: {appt.reason}</div>
+                                                    </div>
+                                                    <div style={{ display: "flex", gap: "10px" }}>
+                                                        {/* Pending Actions */}
+                                                        {appt.status === "Pending" && (
+                                                            <>
+                                                                <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{ background: "#4CAF50", color: "white", padding: "8px 12px", border: "none", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
+                                                                <button onClick={() => openDeclineModal(appt.id)} className="action-btn" style={{ background: "#f44336", color: "white", padding: "8px 12px", border: "none", borderRadius: "6px", cursor: "pointer" }}>Decline</button>
+                                                            </>
+                                                        )}
+
+                                                        {/* Approved Actions (Only show for Active) */}
+                                                        {appt.status === "Approved" && !appt.isCompleted && (
+                                                            <>
+                                                                <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{ background: "#2196F3", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500" }}>Consultation</button>
+                                                                <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{ background: "#f44336", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500" }}>Cancel</button>
+                                                            </>
+                                                        )}
+
+                                                        {/* Completed Actions (View Only) */}
+                                                        {appt.status === "Approved" && appt.isCompleted && (
+                                                            <button disabled style={{ background: "#e0e0e0", color: "#888", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "default", fontSize: "12px" }}>Completed</button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ));
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    
+                    {/* --- RECORDS TAB (UPDATED) --- */}
+                    {activeTab === "records" && (
+                        <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                            <h3>Pet Records</h3>
+                            <span style={{ marginLeft: "15px", fontSize: "16px", color: "#666", fontWeight: "normal" }}>
+                                Total: {filteredRecords.length}
+                            </span>
+
+                            {/* Filter Controls */}
+                            <div style={{ display: "flex", gap: "15px", marginBottom: "15px" }}>
+                                <input
+                                    type="text"
+                                    placeholder="Search pet or owner name..."
+                                    value={petSearch}
+                                    onChange={(e) => setPetSearch(e.target.value)}
+                                    style={{ flex: 1, padding: "10px", border: "1px solid #ddd", borderRadius: "6px" }}
+                                />
+                                <div style={{ display: "flex", background: "#f1f1f1", borderRadius: "8px", padding: "4px" }}>
+                                    {["All", "Dog", "Cat", "Other"].map(type => (
+                                        <button
+                                            key={type}
+                                            onClick={() => setPetFilterType(type)}
+                                            style={{
+                                                background: petFilterType === type ? "white" : "transparent",
+                                                color: petFilterType === type ? "#2196F3" : "#666",
+                                                fontWeight: petFilterType === type ? "bold" : "normal",
+                                                border: "none",
+                                                borderRadius: "6px",
+                                                padding: "6px 15px",
+                                                cursor: "pointer",
+                                                boxShadow: petFilterType === type ? "0 2px 4px rgba(0,0,0,0.1)" : "none",
+                                                transition: "all 0.2s"
+                                            }}
+                                        >
+                                            {type}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div style={{ flex: 1, overflowY: "auto" }}>
+                                {viewingPet ? (
+                                    <div>
+                                        <button onClick={() => setViewingPet(null)} style={{ marginBottom: "15", padding: "5px 10px", cursor: "pointer", border: "1px solid #ccc", borderRadius: "4px", background: "white", fontSize: "12px" }}>← Back to List</button>
+                                        <div style={{ background: "#f9f9f9", padding: "20px", borderRadius: "8px", border: "1px solid #ddd" }}>
+                                            <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
+                                            <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
+                                            <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
+                                            <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
+
+                                            <h4 style={{ marginTop: "10px", borderBottom: "1px solid #ccc", paddingBottom: "5px", fontSize: "16px", color: "#1c65a1ff" }}>Medical History</h4>
+                                            {appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").length === 0 ? <p style={{ color: "#888" }}>No history yet.</p> : (
+                                                appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").map(hist => (
+                                                    <div key={hist.id} style={{ background: "white", padding: "10px", borderRadius: "6px", marginBottom: "10px", border: "1px solid #eee" }}>
+                                                        <div style={{ fontWeight: "bold", color: "#2196F3" }}>{hist.date} - {hist.reason}</div>
+                                                        <div style={{ fontSize: "14px", marginTop: "5px" }}><strong>Diagnosis:</strong> {hist.diagnosis}</div>
+                                                        <div style={{ fontSize: "14px" }}><strong>Treatment:</strong> {hist.medicine}</div>
+                                                        {hist.notes && <div style={{ fontSize: "13px", color: "#555", marginTop: "5px", fontStyle: "italic" }}>"{hist.notes}"</div>}
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <table style={{ width: "100%", borderCollapse: "collapse", background: "white" }}>
+                                        <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 5, boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
+                                            <tr style={{ textAlign: "left", color: "#555" }}>
+                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet Name</th>
+                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Species / Breed</th>
+                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Owner</th>
+                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Contact</th>
+                                                <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredRecords.length === 0 ? (
+                                                <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#888" }}>No pets found matching filters.</td></tr>
+                                            ) : (
+                                                filteredRecords.map(pet => {
+                                                    const owner = owners.find(o => o.id === pet.ownerId);
+                                                    return (
+                                                        <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
+                                                            <td style={{ padding: "12px", fontWeight: "bold", fontSize: "15px" }}>{pet.name}</td>
+                                                            <td style={{ padding: "12px" }}>
+                                                                {pet.species === "Cat" ? "🐱" : pet.species === "Dog" ? "🐶" : "🐾"} {pet.species}
+                                                                <br /><span style={{ fontSize: "12px", color: "#888" }}>{pet.breed}</span>
+                                                            </td>
+                                                            <td style={{ padding: "12px" }}>
+                                                                {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown Owner"}
+                                                            </td>
+                                                            <td style={{ padding: "12px", color: "#555" }}>
+                                                                {owner?.phone || owner?.phoneNumber || <span style={{ color: "#ccc" }}>N/A</span>}
+                                                            </td>
+                                                            <td style={{ padding: "12px" }}>
+                                                                <button
+                                                                    onClick={() => setViewingPet(pet)}
+                                                                    style={{
+                                                                        background: "#e3f2fd",
+                                                                        color: "#1565C0",
+                                                                        border: "none",
+                                                                        padding: "6px 12px",
+                                                                        borderRadius: "4px",
+                                                                        cursor: "pointer",
+                                                                        fontWeight: "bold",
+                                                                        fontSize: "13px"
+                                                                    }}
+                                                                >
+                                                                    View
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })
+                                            )}
+                                        </tbody>
+                                    </table>
                                 )}
                             </div>
                         </div>
                     )}
-                </div>
-            )}
 
-            {/* ... (RECORDS TAB, MESSAGES TAB, INVENTORY TAB, REPORTS TAB remain unchanged) ... */}
-            
-            {/* --- RECORDS TAB (UPDATED) --- */}
-            {activeTab === "records" && (
-                <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                    <h3>Pet Records</h3>
-                    <span style={{ marginLeft: "15px", fontSize: "16px", color: "#666", fontWeight: "normal" }}>
-                        Total: {filteredRecords.length}
-                    </span>
-                    
-                    {/* Filter Controls */}
-                    <div style={{ display: "flex", gap: "15px", marginBottom: "15px" }}>
-                        <input 
-                            type="text" 
-                            placeholder="Search pet or owner name..." 
-                            value={petSearch} 
-                            onChange={(e) => setPetSearch(e.target.value)} 
-                            style={{ flex: 1, padding: "10px", border: "1px solid #ddd", borderRadius: "6px" }} 
-                        />
-                        <div style={{ display: "flex", background: "#f1f1f1", borderRadius: "8px", padding: "4px" }}>
-                            {["All", "Dog", "Cat", "Other"].map(type => (
-                                <button 
-                                    key={type} 
-                                    onClick={() => setPetFilterType(type)}
-                                    style={{
-                                        background: petFilterType === type ? "white" : "transparent",
-                                        color: petFilterType === type ? "#2196F3" : "#666",
-                                        fontWeight: petFilterType === type ? "bold" : "normal",
-                                        border: "none",
-                                        borderRadius: "6px",
-                                        padding: "6px 15px",
-                                        cursor: "pointer",
-                                        boxShadow: petFilterType === type ? "0 2px 4px rgba(0,0,0,0.1)" : "none",
-                                        transition: "all 0.2s"
-                                    }}
-                                >
-                                    {type}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    
-                    <div style={{ flex: 1, overflowY: "auto" }}>
-                        {viewingPet ? (
-                            <div>
-                                <button onClick={() => setViewingPet(null)} style={{ marginBottom: "15", padding: "5px 10px", cursor: "pointer", border:"1px solid #ccc", borderRadius:"4px", background:"white", fontSize: "12px"}}>← Back to List</button>
-                                <div style={{ background: "#f9f9f9", padding: "20px", borderRadius: "8px", border: "1px solid #ddd" }}>
-                                    <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
-                                    <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
-                                    <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
-                                    <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
-                                    
-                                    <h4 style={{ marginTop: "10px", borderBottom: "1px solid #ccc", paddingBottom: "5px", fontSize: "16px", color: "#1c65a1ff"}}>Medical History</h4>
-                                    {appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").length === 0 ? <p style={{color:"#888"}}>No history yet.</p> : (
-                                        appointments.filter(a => a.petId === viewingPet.id && a.status === "Done").map(hist => (
-                                            <div key={hist.id} style={{ background: "white", padding: "10px", borderRadius: "6px", marginBottom: "10px", border: "1px solid #eee" }}>
-                                                <div style={{ fontWeight: "bold", color: "#2196F3" }}>{hist.date} - {hist.reason}</div>
-                                                <div style={{ fontSize: "14px", marginTop: "5px" }}><strong>Diagnosis:</strong> {hist.diagnosis}</div>
-                                                <div style={{ fontSize: "14px" }}><strong>Treatment:</strong> {hist.medicine}</div>
-                                                {hist.notes && <div style={{ fontSize: "13px", color: "#555", marginTop: "5px", fontStyle: "italic" }}>"{hist.notes}"</div>}
+                    {/* --- MESSAGES TAB --- */}
+                    {activeTab === "messages" && (
+                        <div className="card" style={{ width: "100%", height: "100%", display: "flex", padding: 0, overflow: "hidden" }}>
+                            <div style={{ width: "300px", borderRight: "1px solid #eee", display: "flex", flexDirection: "column", background: "#f9f9f9" }}>
+                                <div style={{ padding: "15px", fontWeight: "bold", borderBottom: "1px solid #ddd", background: "white" }}>Client List</div>
+                                <div style={{ flex: 1, overflowY: "auto" }}>
+                                    {owners.map(owner => {
+                                        const unread = getUnreadCount(owner.id);
+                                        return (
+                                            <div key={owner.id} onClick={() => setSelectedChatOwner(owner)} style={{ padding: "15px", cursor: "pointer", background: selectedChatOwner?.id === owner.id ? "#e3f2fd" : "transparent", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between" }}>
+                                                <span>{owner.firstName} {owner.lastName}</span>
+                                                {unread > 0 && <span style={{ background: "red", color: "white", borderRadius: "50%", padding: "2px 8px", fontSize: "12px" }}>{unread}</span>}
                                             </div>
-                                        ))
-                                    )}
+                                        );
+                                    })}
                                 </div>
                             </div>
-                        ) : (
-                            <table style={{ width: "100%", borderCollapse: "collapse", background: "white" }}>
-                                <thead style={{ position: "sticky", top: 0, background: "#fafafa", zIndex: 5, boxShadow: "0 2px 5px rgba(0,0,0,0.05)" }}>
-                                    <tr style={{ textAlign: "left", color: "#555" }}>
-                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Pet Name</th>
-                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Species / Breed</th>
-                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Owner</th>
-                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Contact</th>
-                                        <th style={{ padding: "12px", borderBottom: "2px solid #eee" }}>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {filteredRecords.length === 0 ? (
-                                        <tr><td colSpan="5" style={{ padding: "20px", textAlign: "center", color: "#888" }}>No pets found matching filters.</td></tr>
-                                    ) : (
-                                        filteredRecords.map(pet => {
-                                            const owner = owners.find(o => o.id === pet.ownerId);
-                                            return (
-                                                <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
-                                                    <td style={{ padding: "12px", fontWeight: "bold", fontSize:"15px" }}>{pet.name}</td>
-                                                    <td style={{ padding: "12px" }}>
-                                                        {pet.species === "Cat" ? "🐱" : pet.species === "Dog" ? "🐶" : "🐾"} {pet.species} 
-                                                        <br/><span style={{ fontSize: "12px", color: "#888" }}>{pet.breed}</span>
-                                                    </td>
-                                                    <td style={{ padding: "12px" }}>
-                                                        {owner ? `${owner.firstName} ${owner.lastName}` : "Unknown Owner"}
-                                                    </td>
-                                                    <td style={{ padding: "12px", color: "#555" }}>
-                                                        {owner?.phone || owner?.phoneNumber || <span style={{color:"#ccc"}}>N/A</span>}
-                                                    </td>
-                                                    <td style={{ padding: "12px" }}>
-                                                        <button 
-                                                            onClick={() => setViewingPet(pet)} 
-                                                            style={{ 
-                                                                background: "#e3f2fd", 
-                                                                color: "#1565C0", 
-                                                                border: "none", 
-                                                                padding: "6px 12px", 
-                                                                borderRadius: "4px", 
-                                                                cursor: "pointer", 
-                                                                fontWeight: "bold", 
-                                                                fontSize: "13px" 
-                                                            }}
-                                                        >
-                                                            View
-                                                        </button>
-                                                    </td>
-                                                </tr>
-                                            );
-                                        })
-                                    )}
-                                </tbody>
-                            </table>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* --- MESSAGES TAB --- */}
-            {activeTab === "messages" && (
-                <div className="card" style={{ width: "100%", height: "100%", display: "flex", padding: 0, overflow: "hidden" }}>
-                    <div style={{ width: "300px", borderRight: "1px solid #eee", display: "flex", flexDirection: "column", background: "#f9f9f9" }}>
-                        <div style={{ padding: "15px", fontWeight: "bold", borderBottom: "1px solid #ddd", background: "white" }}>Client List</div>
-                        <div style={{ flex: 1, overflowY: "auto" }}>
-                            {owners.map(owner => {
-                                const unread = getUnreadCount(owner.id);
-                                return (
-                                    <div key={owner.id} onClick={() => setSelectedChatOwner(owner)} style={{ padding: "15px", cursor: "pointer", background: selectedChatOwner?.id === owner.id ? "#e3f2fd" : "transparent", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between" }}>
-                                        <span>{owner.firstName} {owner.lastName}</span>
-                                        {unread > 0 && <span style={{ background: "red", color: "white", borderRadius: "50%", padding: "2px 8px", fontSize: "12px" }}>{unread}</span>}
-                                    </div>
-                                );
-                            })}
+                            <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "white" }}>
+                                {selectedChatOwner ? (
+                                    <>
+                                        <div style={{ padding: "15px", borderBottom: "1px solid #eee", fontWeight: "bold", background: "#f1f1f1" }}>Chat with {selectedChatOwner.firstName}</div>
+                                        <div style={{ flex: 1, padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
+                                            {chatMessages.length === 0 && <p style={{ textAlign: "center", color: "#888" }}>No messages yet.</p>}
+                                            {chatMessages.map(msg => (
+                                                <div key={msg.id} style={{ alignSelf: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start", maxWidth: "70%", display: "flex", flexDirection: "column", alignItems: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start" }}>
+                                                    <div style={{ background: msg.senderId === auth.currentUser.uid ? "#2196F3" : "#eee", color: msg.senderId === auth.currentUser.uid ? "white" : "#333", padding: "10px 15px", borderRadius: "15px", fontSize: "14px" }}>
+                                                        {msg.text}
+                                                        <div style={{ fontSize: "10px", marginTop: "5px", textAlign: "right", opacity: 0.7 }}>
+                                                            {msg.createdAt?.toDate
+                                                                ? (msg.createdAt.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt)).toLocaleString([], { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                                                : "Just now"
+                                                            }
+                                                        </div>
+                                                    </div>
+                                                    {msg.senderId === auth.currentUser.uid && (
+                                                        <button onClick={() => handleStartEdit(msg)} style={{ fontSize: "10px", border: "none", background: "none", color: "#999", cursor: "pointer", marginTop: "2px" }}>Edit</button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                            <div ref={scrollRef} />
+                                        </div>
+                                        <form onSubmit={handleSendMessage} style={{ padding: "15px", borderTop: "1px solid #eee", display: "flex", gap: "10px" }}>
+                                            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." style={{ flex: 1, padding: "10px", borderRadius: "20px", border: "1px solid #ddd" }} />
+                                            {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{ background: "#999", color: "white", border: "none", padding: "0 15px", borderRadius: "20px", cursor: "pointer" }}>Cancel</button>}
+                                            <button type="submit" disabled={isSendingMessage} style={{ background: isSendingMessage ? "#ccc" : "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "20px", cursor: isSendingMessage ? "not-allowed" : "pointer", fontWeight: "bold" }}>
+                                                {isSendingMessage ? "Sending..." : (editingMessageId ? "Update" : "Send")}
+                                            </button>
+                                        </form>
+                                    </>
+                                ) : (
+                                    <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>Select a client to start chatting</div>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", background: "white" }}>
-                        {selectedChatOwner ? (
-                            <>
-                                <div style={{ padding: "15px", borderBottom: "1px solid #eee", fontWeight: "bold", background: "#f1f1f1" }}>Chat with {selectedChatOwner.firstName}</div>
-                                <div style={{ flex: 1, padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
-                                    {chatMessages.length === 0 && <p style={{ textAlign: "center", color: "#888" }}>No messages yet.</p>}
-                                    {chatMessages.map(msg => (
-                                        <div key={msg.id} style={{ alignSelf: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start", maxWidth: "70%", display: "flex", flexDirection: "column", alignItems: msg.senderId === auth.currentUser.uid ? "flex-end" : "flex-start" }}>
-                                            <div style={{ background: msg.senderId === auth.currentUser.uid ? "#2196F3" : "#eee", color: msg.senderId === auth.currentUser.uid ? "white" : "#333", padding: "10px 15px", borderRadius: "15px", fontSize: "14px" }}>
-                                                {msg.text}
-                                                <div style={{ fontSize: "10px", marginTop: "5px", textAlign: "right", opacity: 0.7 }}>
-                                                {msg.createdAt?.toDate 
-                                                    ? (msg.createdAt.toDate ? msg.createdAt.toDate() : new Date(msg.createdAt)).toLocaleString([], {year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'})
-                                                    : "Just now"
-                                                }
+                    )}
+
+                    {/* --- INVENTORY TAB --- */}
+                    {activeTab === "inventory" && (
+                        <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "15px" }}>
+                                <h3>Inventory Management</h3>
+                                <div style={{ display: "flex", gap: "10px" }}>
+                                    <button onClick={() => setShowPrintModal(true)} style={{ background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer" }}>🖨️ Print Report</button>
+                                    <button onClick={handleOpenAddInventory} style={{ background: "#4CAF50", color: "white", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>+ Add Item</button>
+                                </div>
+                            </div>
+
+                            {/* --- NEW SUB-TABS --- */}
+                            <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
+                                <button
+                                    onClick={() => setInventoryFilter("All")}
+                                    style={{
+                                        padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
+                                        background: inventoryFilter === "All" ? "#2196F3" : "#e0e0e0",
+                                        color: inventoryFilter === "All" ? "white" : "#333",
+                                        fontSize: "12px"
+                                    }}
+                                >
+                                    All Items
+                                </button>
+                                <button
+                                    onClick={() => setInventoryFilter("LowStock")}
+                                    style={{
+                                        padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
+                                        background: inventoryFilter === "LowStock" ? "#ff9800" : "#e0e0e0",
+                                        color: inventoryFilter === "LowStock" ? "white" : "#333",
+                                        fontSize: "12px"
+                                    }}
+                                >
+                                    Low Stock/Out of Stock
+                                </button>
+                            </div>
+
+                            <input type="text" placeholder="Search Inventory..." value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ddd", marginBottom: "15px", width: "100%", boxSizing: "border-box" }} />
+
+                            <div style={{ flex: 1, overflowY: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
+                                    <thead style={{ background: "#f1f1f1", position: "sticky", top: 0 }}>
+                                        <tr>
+                                            <th style={{ padding: "10px", textAlign: "left" }}>Item Name</th>
+                                            <th style={{ padding: "10px", textAlign: "left" }}>Category</th>
+                                            <th style={{ padding: "10px", textAlign: "left" }}>Stock</th>
+                                            <th style={{ padding: "10px", textAlign: "left" }}>Expiry</th>
+                                            <th style={{ padding: "10px", textAlign: "left" }}>Status</th>
+                                            <th style={{ padding: "10px", textAlign: "center" }}>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {inventory
+                                            .filter(i => {
+                                                // Filter Logic: Check Search AND Check Tab Selection
+                                                const matchesSearch = i.name.toLowerCase().includes(inventorySearch.toLowerCase());
+                                                const matchesTab = inventoryFilter === "All" || i.quantity <= (i.threshold || 5);
+                                                return matchesSearch && matchesTab;
+                                            })
+                                            .map(item => {
+                                                const status = getStockStatus(item);
+                                                return (
+                                                    <tr key={item.id} style={{ borderBottom: "1px solid #eee" }}>
+                                                        <td style={{ padding: "10px" }}>{item.name}</td>
+                                                        <td style={{ padding: "10px" }}>{item.category}</td>
+                                                        <td style={{ padding: "10px", fontWeight: "bold" }}>{item.quantity} {item.unit}</td>
+                                                        <td style={{ padding: "10px", color: status.label === 'Expired' ? 'red' : 'inherit' }}>{item.expiryDate || "-"}</td>
+                                                        <td style={{ padding: "10px" }}><span style={{ background: status.color, color: "white", padding: "3px 8px", borderRadius: "12px", fontSize: "11px" }}>{status.label}</span></td>
+                                                        <td style={{ padding: "10px", textAlign: "center" }}>
+                                                            <button
+                                                                onClick={() => { handleOpenEditInventory(item); setUpdateReason(""); }}
+                                                                style={{ background: "#2196F3", color: "white", border: "none", padding: "5px 10px", borderRadius: "4px", cursor: "pointer", fontSize: "11px" }}>Update</button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                    </tbody>
+                                </table>
+                                {/* Optional: Message when list is empty */}
+                                {inventory.filter(i => (inventoryFilter === "All" || i.quantity <= (i.threshold || 5)) && i.name.toLowerCase().includes(inventorySearch.toLowerCase())).length === 0 && (
+                                    <div style={{ textAlign: "center", color: "#999", padding: "20px" }}>No items found.</div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+
+                    {/* --- REPORTS TAB --- */}
+                    {activeTab === "reports" && (
+                        <div className="card" style={{ width: "100%", height: "100%", overflowY: "auto", padding: "30px", boxSizing: "border-box" }}>
+                            <div style={{ maxWidth: "800px", margin: "0 auto" }}>
+                                <h2 style={{ textAlign: "center", color: "#333", marginBottom: "30px" }}>Clinic Performance Reports</h2>
+
+                                <div style={{ background: "#f5f5f5", padding: "20px", borderRadius: "12px", display: "flex", gap: "15px", alignItems: "center", justifyContent: "center", marginBottom: "30px", border: "1px solid #ddd" }}>
+                                    <label><strong>From:</strong> <input type="date" value={reportStartDate} onChange={(e) => setReportStartDate(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }} /></label>
+                                    <label><strong>To:</strong> <input type="date" value={reportEndDate} onChange={(e) => setReportEndDate(e.target.value)} style={{ padding: "8px", borderRadius: "6px", border: "1px solid #ccc" }} /></label>
+                                    {(reportStartDate && reportEndDate) && <button onClick={printSummaryReport} style={{ marginLeft: "15px", background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer" }}>🖨️ Print Summary</button>}
+                                </div>
+
+                                {(reportStartDate && reportEndDate) ? (
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+                                        {/* Inventory Stats Block */}
+                                        <div style={{ background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
+                                            <h4 style={{ marginTop: 0, color: "#444", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
+                                                Inventory Overview
+                                            </h4>
+
+                                            <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginTop: "15px" }}>
+                                                {/* Total Count */}
+                                                <div style={{ flex: "1", minWidth: "150px", borderRight: "1px solid #eee" }}>
+                                                    <div style={{ fontSize: "14px", color: "#888" }}>Total Unique Items</div>
+                                                    <div style={{ fontSize: "32px", fontWeight: "bold", color: "#2196F3" }}>
+                                                        {inventoryStats.totalItems}
+                                                    </div>
+                                                    <div style={{ fontSize: "12px", color: "#666" }}>Across {INVENTORY_CATEGORIES.length} categories</div>
+                                                </div>
+
+                                                {/* Category Breakdown */}
+                                                <div style={{ flex: "2", minWidth: "250px", borderRight: "1px solid #eee" }}>
+                                                    <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Items by Category</div>
+                                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                                                        {Object.entries(inventoryStats.categoryCounts).map(([cat, count]) => (
+                                                            <div key={cat} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                                                                <span>{cat}:</span>
+                                                                <span style={{ fontWeight: "bold" }}>{count}</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Recently Added (Shows what was just added) */}
+                                                <div style={{ flex: "2", minWidth: "250px" }}>
+                                                    <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Recently Added Stock</div>
+                                                    {inventoryStats.recentActivity.length > 0 ? (
+                                                        <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "#555" }}>
+                                                            {inventoryStats.recentActivity.map(log => (
+                                                                <li key={log.id} style={{ marginBottom: "5px" }}>
+                                                                    <strong>{log.name}</strong>
+                                                                    {/* Shows "+5 boxes" in green */}
+                                                                    <span style={{ color: "#2e7d32", fontWeight: "bold", marginLeft: "6px" }}>
+                                                                        +{log.added} {log.unit}
+                                                                    </span>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : (
+                                                        <div style={{ fontSize: "13px", color: "#aaa", fontStyle: "italic" }}>No recent additions</div>
+                                                    )}
                                                 </div>
                                             </div>
-                                            {msg.senderId === auth.currentUser.uid && (
-                                                <button onClick={() => handleStartEdit(msg)} style={{fontSize:"10px", border:"none", background:"none", color:"#999", cursor:"pointer", marginTop:"2px"}}>Edit</button>
-                                            )}
                                         </div>
+
+
+                                        {/* Appointments Stats Block */}
+                                        <div style={{ background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
+                                            <h4 style={{ marginTop: 0, color: "#444", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
+                                                📅 Appointment Overview
+                                            </h4>
+
+                                            <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginTop: "15px" }}>
+                                                {/* Total Count */}
+                                                <div style={{ flex: "1", minWidth: "150px", borderRight: "1px solid #eee" }}>
+                                                    <div style={{ fontSize: "14px", color: "#888" }}>Total Appointments</div>
+                                                    <div style={{ fontSize: "32px", fontWeight: "bold", color: "#4CAF50" }}>
+                                                        {appointmentStats.totalAppts}
+                                                    </div>
+                                                    <div style={{ fontSize: "12px", color: "#666" }}>All time records</div>
+                                                </div>
+
+                                                {/* Reason Breakdown */}
+                                                <div style={{ flex: "2", minWidth: "250px", borderRight: "1px solid #eee" }}>
+                                                    <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>By Visit Reason</div>
+                                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                                                        {Object.entries(appointmentStats.reasonCounts).map(([reason, count]) => (
+                                                            count > 0 && (
+                                                                <div key={reason} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
+                                                                    <span>{reason}:</span>
+                                                                    <span style={{ fontWeight: "bold" }}>{count}</span>
+                                                                </div>
+                                                            )
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Upcoming List */}
+                                                <div style={{ flex: "2", minWidth: "250px" }}>
+                                                    <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Upcoming Appointments</div>
+                                                    {appointmentStats.upcoming.length > 0 ? (
+                                                        <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "#555" }}>
+                                                            {appointmentStats.upcoming.map(app => (
+                                                                <li key={app.id} style={{ marginBottom: "5px" }}>
+                                                                    <strong>{app.date}</strong> - {app.petName} <span style={{ color: "#999" }}>({app.reason})</span>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    ) : (
+                                                        <div style={{ fontSize: "13px", color: "#aaa", fontStyle: "italic" }}>No upcoming appointments</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div style={{ textAlign: "center", color: "#888", padding: "50px", border: "2px dashed #ddd", borderRadius: "12px" }}>
+                                        Please select a date range to generate the report.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                </div>
+            </main>
+
+            {/* --- MODALS --- */}
+            {/* 1. Walk In Modal */}
+            {showWalkInModal && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "400px", maxWidth: "90%" }}>
+                        <h3 style={{ marginTop: 0 }}>New Walk-In Appointment</h3>
+                        <form onSubmit={handleCreateWalkIn} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
+
+                            {/* --- UPDATED OWNER SELECTION --- */}
+                            <div style={{ display: "flex", gap: "10px" }}>
+                                <select required value={walkInData.ownerId}
+                                    onChange={(e) => setWalkInData({ ...walkInData, ownerId: e.target.value })}
+                                    style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc", width: "100%" }}
+                                >
+                                    <option value="">Select Owner</option>
+                                    {owners.map(owner => (
+                                        <option key={owner.id} value={owner.id}>
+                                            {owner.firstName} {owner.lastName}
+                                        </option>
                                     ))}
-                                    <div ref={scrollRef} />
-                                </div>
-                                <form onSubmit={handleSendMessage} style={{ padding: "15px", borderTop: "1px solid #eee", display: "flex", gap: "10px" }}>
-                                    <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." style={{ flex: 1, padding: "10px", borderRadius: "20px", border: "1px solid #ddd" }} />
-                                    {editingMessageId && <button type="button" onClick={handleCancelEdit} style={{background:"#999", color:"white", border:"none", padding:"0 15px", borderRadius:"20px", cursor:"pointer"}}>Cancel</button>}
-                                    <button type="submit" disabled={isSendingMessage} style={{ background: isSendingMessage ? "#ccc" : "#2196F3", color: "white", border: "none", padding: "10px 20px", borderRadius: "20px", cursor: isSendingMessage ? "not-allowed" : "pointer", fontWeight: "bold" }}>
-                                        {isSendingMessage ? "Sending..." : (editingMessageId ? "Update" : "Send")}
-                                    </button>
-                                </form>
-                            </>
-                        ) : (
-                            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>Select a client to start chatting</div>
-                        )}
+                                </select>
+                                <button type="button" onClick={() => setShowRegisterModal(true)}
+                                    style={{ background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", padding: "0 15px", cursor: "pointer", fontSize: "13px" }}>
+                                    + New
+                                </button>
+                            </div>
+
+                            {walkInData.ownerId && (
+                                <select required value={walkInData.petId}
+                                    onChange={(e) => setWalkInData({ ...walkInData, petId: e.target.value })}
+                                    style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc", width: "100%" }}
+                                >
+                                    <option value="">Select Pet</option>
+                                    {filteredPets.map(pet => (
+                                        <option key={pet.id} value={pet.id}>
+                                            {pet.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
+                            <input type="date" required value={walkInData.date} onChange={e => setWalkInData({ ...walkInData, date: e.target.value })} style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }} />
+                            <input type="time" required value={walkInData.time} onChange={e => setWalkInData({ ...walkInData, time: e.target.value })} style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }} />
+                            <select required value={walkInData.reason} onChange={e => setWalkInData({ ...walkInData, reason: e.target.value })} style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }}>
+                                <option value="">Select Reason</option>
+                                {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                            </select>
+                            <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                                <button type="submit" style={{ flex: 1, background: "#2196F3", color: "white", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer" }}>Book</button>
+                                <button type="button" onClick={() => setShowWalkInModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
             )}
 
-            {/* --- INVENTORY TAB --- */}
-            {activeTab === "inventory" && (
-                 <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
-                    <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"15px"}}>
-                        <h3>Inventory Management</h3>
-                        <div style={{display:"flex", gap:"10px"}}>
-                            <button onClick={() => setShowPrintModal(true)} style={{background:"#607D8B", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>🖨️ Print Report</button>
-                            <button onClick={handleOpenAddInventory} style={{background:"#4CAF50", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>+ Add Item</button>
+            {/* --- REGISTER NEW OWNER MODAL --- */}
+            {showRegisterModal && (
+                <div style={{
+                    position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+                    backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center",
+                    alignItems: "center", zIndex: 3200
+                }}>
+                    <div style={{
+                        background: "white", padding: "25px", borderRadius: "12px",
+                        width: "850px", maxWidth: "95%", boxShadow: "0 4px 15px rgba(0,0,0,0.2)",
+                        maxHeight: "90vh", overflowY: "auto"
+                    }}>
+                        <h3 style={{ marginTop: 0, color: "#1976D2", textAlign: 'center', marginBottom: '20px' }}>Walk-in Registration</h3>
+
+                        {registerError && (
+                            <div style={{ background: "#ffebee", color: "#d32f2f", padding: "10px", borderRadius: "6px", fontSize: "13px", marginBottom: "15px" }}>
+                                {registerError}
+                            </div>
+                        )}
+
+                        <form onSubmit={handleRegisterOwner}>
+                            {/* SIDE-BY-SIDE CONTAINER */}
+                            <div style={{ display: "flex", gap: "30px", flexWrap: "wrap" }}>
+
+                                {/* LEFT COLUMN: OWNER INFORMATION */}
+                                <div style={{ flex: 1, minWidth: "300px" }}>
+                                    <h4 style={{ margin: "0 0 15px 0", color: "#666", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>Owner Information</h4>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                                        <div style={{ display: "flex", gap: "10px" }}>
+                                            <input
+                                                type="text" placeholder="First Name" required autoComplete="off" pattern="[A-Za-z\s]+" title="Only letters is allowed"
+                                                value={registerData.firstName}
+                                                onChange={(e) => setRegisterData({ ...registerData, firstName: e.target.value })}
+                                                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                            />
+                                            <input
+                                                type="text" placeholder="Last Name" required autoComplete="off" pattern="[A-Za-z\s]+" title="Only letters is allowed"
+                                                value={registerData.lastName}
+                                                onChange={(e) => setRegisterData({ ...registerData, lastName: e.target.value })}
+                                                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                            />
+                                        </div>
+
+                                        <input
+                                            type="email" placeholder="Email Address" required autoComplete="off"
+                                            value={registerData.email}
+                                            onChange={(e) => setRegisterData({ ...registerData, email: e.target.value })}
+                                            style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                        />
+
+                                        <input
+                                            type="password" placeholder="Password" required autoComplete="new-password"
+                                            value={registerData.password}
+                                            onChange={(e) => setRegisterData({ ...registerData, password: e.target.value })}
+                                            style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                        />
+
+                                        <input
+                                            type="password" placeholder="Confirm Password" required autoComplete="new-password"
+                                            value={registerData.confirmPassword}
+                                            onChange={(e) => setRegisterData({ ...registerData, confirmPassword: e.target.value })}
+                                            style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* RIGHT COLUMN: PET INFORMATION */}
+                                <div style={{ flex: 1, minWidth: "300px" }}>
+                                    <h4 style={{ margin: "0 0 15px 0", color: "#666", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>Pet Information</h4>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                                        <div style={{ display: "flex", gap: "10px" }}>
+                                            <input
+                                                type="text" placeholder="Pet Name" required
+                                                value={registerData.petName}
+                                                onChange={(e) => setRegisterData({ ...registerData, petName: e.target.value })}
+                                                style={{ flex: 2, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                            />
+                                            <select
+                                                value={registerData.species}
+                                                onChange={(e) => setRegisterData({ ...registerData, species: e.target.value, breed: "" })}
+                                                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                            >
+                                                <option value="Dog">Dog</option>
+                                                <option value="Cat">Cat</option>
+                                            </select>
+                                        </div>
+
+                                        <select
+                                            required
+                                            value={registerData.breed}
+                                            onChange={(e) => setRegisterData({ ...registerData, breed: e.target.value })}
+                                            style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                        >
+                                            <option value="">Select Breed</option>
+                                            {(registerData.species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => (
+                                                <option key={b} value={b}>{b}</option>
+                                            ))}
+                                        </select>
+
+                                        {registerData.breed === "Other" && (
+                                            <input
+                                                placeholder="Please specify breed" required
+                                                value={registerData.otherBreed}
+                                                onChange={(e) => setRegisterData({ ...registerData, otherBreed: e.target.value })}
+                                                style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                            />
+                                        )}
+
+                                        <div style={{ display: "flex", gap: "10px" }}>
+                                            <div style={{ flex: 1 }}>
+                                                <div style={{ display: "flex", gap: "4px" }}>
+                                                    <input
+                                                        type="number" placeholder="Age" required
+                                                        value={registerData.age}
+                                                        onChange={(e) => setRegisterData({ ...registerData, age: e.target.value })}
+                                                        style={{ width: "70px", padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                                    />
+                                                    <select
+                                                        value={registerData.ageUnit}
+                                                        onChange={(e) => setRegisterData({ ...registerData, ageUnit: e.target.value })}
+                                                        style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                                    >
+                                                        <option value="Years">Years</option>
+                                                        <option value="Months">Months</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <select
+                                                value={registerData.gender}
+                                                onChange={(e) => setRegisterData({ ...registerData, gender: e.target.value })}
+                                                style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
+                                            >
+                                                <option value="Male">Male</option>
+                                                <option value="Female">Female</option>
+                                            </select>
+                                        </div>
+
+                                        <textarea
+                                            placeholder="Medical History / Notes (Optional)"
+                                            value={registerData.medicalHistory}
+                                            onChange={(e) => setRegisterData({ ...registerData, medicalHistory: e.target.value })}
+                                            style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc", minHeight: "82px", fontFamily: "inherit" }}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* BOTTOM ACTIONS */}
+                            <div style={{ display: "flex", gap: "15px", marginTop: "30px", borderTop: "1px solid #eee", paddingTop: "20px" }}>
+                                <button
+                                    type="submit"
+                                    disabled={registerLoading}
+                                    style={{
+                                        flex: 1, background: "#4CAF50", color: "white", padding: "14px",
+                                        border: "none", borderRadius: "8px", cursor: "pointer", fontWeight: "bold", fontSize: "16px"
+                                    }}
+                                >
+                                    {registerLoading ? "Processing..." : "Complete Registration"}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setShowRegisterModal(false)}
+                                    style={{
+                                        width: "150px", background: "#f5f5f5", color: "#666", padding: "14px",
+                                        border: "1px solid #ddd", borderRadius: "8px", cursor: "pointer", fontWeight: "bold"
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* 2. Consultation Modal */}
+            {showConsultModal && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "600px", maxWidth: "95%", maxHeight: "90vh", overflowY: "auto" }}>
+                        <h3 style={{ marginTop: 0, color: "#2196F3" }}>Consultation Form</h3>
+                        <form onSubmit={handleFinishConsultation} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
+                            <div style={{ display: "flex", gap: "15px" }}>
+                                <label style={{ flex: 1 }}><strong>Date:</strong><br /><input type="date" required value={consultData.date} onChange={e => setConsultData({ ...consultData, date: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px" }} /></label>
+                                <label style={{ flex: 1 }}><strong>Reason:</strong><br /><input type="text" value={consultData.reason} readOnly style={{ width: "100%", padding: "8px", marginTop: "5px", background: "#f5f5f5" }} /></label>
+                            </div>
+
+                            {/* SYMPTOMS SECTION */}
+                            <div>
+                                <strong>Symptoms:</strong>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "5px", marginTop: "5px" }}>
+                                    {SYMPTOM_OPTIONS.map(sym => (
+                                        <label key={sym} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px", cursor: "pointer", background: consultData.symptoms.includes(sym) ? "#e3f2fd" : "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", width: "100%", boxSizing: "border-box" }}>
+                                            <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)}
+                                                style={{ cursor: "pointer", accentColor: "#2196F3", width: "13px", height: "13px", margin: 0 }} />
+                                            {sym}
+                                        </label>
+                                    ))}
+                                </div>
+                                {/* SPECIFY BOX */}
+                                {consultData.symptoms.includes("Other") && (
+                                    <input type="text" placeholder="Please specify other symptoms..." required value={consultData.otherSymptom} onChange={e => setConsultData({ ...consultData, otherSymptom: e.target.value })}
+                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
+                                    />
+                                )}
+                            </div>
+
+                            {/* DIAGNOSIS SECTION */}
+                            <label><strong>Diagnosis:</strong><br />
+                                <select required value={consultData.diagnosis} onChange={e => setConsultData({ ...consultData, diagnosis: e.target.value })}
+                                    style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }}
+                                >
+                                    <option value="">Select Diagnosis</option>
+                                    {DIAGNOSIS_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                                </select>
+                                {/* SPECIFY BOX */}
+                                {consultData.diagnosis === "Other" && (
+                                    <input type="text" placeholder="Please specify other diagnosis..." required value={consultData.otherDiagnosis} onChange={e => setConsultData({ ...consultData, otherDiagnosis: e.target.value })}
+                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
+                                    />
+                                )}
+                            </label>
+
+                            {/* TREATMENT/MEDICINE SECTION */}
+                            <label><strong>Treatment / Medicine (Inventory):</strong><br />
+                                <select
+                                    required
+                                    value={consultData.medicineId}
+                                    onChange={(e) => {
+                                        const val = e.target.value;
+                                        const item = inventory.find(i => i.id === val);
+                                        setConsultData({
+                                            ...consultData,
+                                            medicineId: val,
+                                            medicineName: item ? item.name : (val === "Other" ? "" : "None"),
+                                            dispenseItem: true // Reset to true when changing item
+                                        });
+                                    }}
+                                    style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }}
+                                >
+                                    <option value="">Select Item or Treatment</option>
+                                    {/* Real Inventory Items */}
+                                    {inventory.filter(i => i.quantity > 0).map(item => (
+                                        <option key={item.id} value={item.id}>{item.name} ({item.quantity} available)</option>
+                                    ))}
+                                    {/* Manual Input Option */}
+                                    <option value="Other">Other / Not in Inventory</option>
+                                </select>
+
+                                {/* --- NEW: DISPENSE CHECKBOX --- */}
+                                {/* Only show this checkbox if a specific Inventory Item is selected (not "Other") */}
+                                {consultData.medicineId && consultData.medicineId !== "Other" && (
+                                    <div style={{ marginTop: "8px", background: "#f9f9f9", padding: "8px", borderRadius: "6px", border: "1px solid #eee" }}>
+                                        <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: "500", color: "#333" }}>
+                                            <input
+                                                type="checkbox"
+                                                checked={consultData.dispenseItem}
+                                                onChange={(e) => setConsultData({ ...consultData, dispenseItem: e.target.checked })}
+                                                style={{ width: "16px", height: "16px", accentColor: "#4CAF50" }}
+                                            />
+                                            Dispense & Deduct Stock
+                                        </label>
+                                        <div style={{ fontSize: "11px", color: "#666", marginLeft: "24px", marginTop: "2px" }}>
+                                            {consultData.dispenseItem
+                                                ? "Item count will be reduced by 1."
+                                                : "Prescription will be recorded, but stock will NOT be deducted."}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* SPECIFY BOX: Only appears if "Other" is selected in the dropdown */}
+                                {consultData.medicineId === "Other" && (
+                                    <textarea
+                                        placeholder="List treatment or medicine not in inventory..."
+                                        required
+                                        rows="2"
+                                        value={consultData.otherMedicine}
+                                        onChange={e => setConsultData({ ...consultData, otherMedicine: e.target.value })}
+                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
+                                    />
+                                )}
+                            </label>
+
+                            <label><strong>Notes:</strong><br />
+                                <textarea value={consultData.notes} onChange={e => setConsultData({ ...consultData, notes: e.target.value })} rows="2" style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} placeholder="Additional observations..." />
+                            </label>
+
+                            <label style={{ background: "#e3f2fd", padding: "10px", borderRadius: "6px" }}>
+                                <strong>Schedule Follow-up (Optional):</strong><br />
+                                <input type="date" value={consultData.followUp} onChange={e => setConsultData({ ...consultData, followUp: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #bbb" }} />
+                            </label>
+
+                            <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                                <button type="submit" disabled={registerLoading}
+                                    style={{ flex: 1, background: registerLoading ? "#ccc" : "#4CAF50", color: "white", border: "none", padding: "12px", borderRadius: "6px", cursor: registerLoading ? "not-allowed" : "pointer", fontWeight: "bold" }}>
+                                    {registerLoading ? "Updating Stock..." : "Finish Consultation"}
+                                </button>
+                                <button type="button" onClick={() => setShowConsultModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "12px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* --- PRINT OPTIONS MODAL --- */}
+            {showPrintModal && (
+                <div style={{
+                    position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
+                    backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000
+                }}>
+                    <div style={{
+                        background: "white", padding: "30px", borderRadius: "12px", width: "350px", maxWidth: "90%",
+                        boxShadow: "0 4px 20px rgba(0,0,0,0.2)", textAlign: "center", display: "flex", flexDirection: "column", gap: "15px"
+                    }}>
+                        <h3 style={{ margin: "0 0 10px 0", color: "#2c3e50" }}>Select Report Type</h3>
+                        <p style={{ margin: 0, color: "#666", fontSize: "14px", marginBottom: "10px" }}>
+                            Which inventory items would you like to print?
+                        </p>
+
+                        <button
+                            onClick={() => printInventoryReport("All")}
+                            style={{ padding: "12px", borderRadius: "8px", border: "1px solid #ddd", background: "white", cursor: "pointer", fontWeight: "600", color: "#333", display: "flex", justifyContent: "center", gap: "10px" }}
+                        >
+                            All Stock
+                        </button>
+
+                        <button
+                            onClick={() => printInventoryReport("Low Stock")}
+                            style={{ padding: "12px", borderRadius: "8px", border: "none", background: "#ff9800", cursor: "pointer", fontWeight: "600", color: "white", display: "flex", justifyContent: "center", gap: "10px" }}
+                        >
+                            Low Stock
+                        </button>
+
+                        <button
+                            onClick={() => printInventoryReport("Out of Stock")}
+                            style={{ padding: "12px", borderRadius: "8px", border: "none", background: "#f44336", cursor: "pointer", fontWeight: "600", color: "white", display: "flex", justifyContent: "center", gap: "10px" }}
+                        >
+                            Out of Stock
+                        </button>
+
+                        <button
+                            onClick={() => setShowPrintModal(false)}
+                            style={{ marginTop: "10px", background: "transparent", border: "none", color: "#999", cursor: "pointer", textDecoration: "underline" }}
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* 3. Inventory Add/Edit Modal */}
+            {showInventoryModal && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "400px" }}>
+                        <h3 style={{ marginTop: 0 }}>{editingInventoryId ? "Edit Item" : "Add New Item"}</h3>
+                        <form onSubmit={handleSaveInventory} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
+                            <input type="text" required placeholder="Item Name" value={inventoryData.name} onChange={e => setInventoryData({ ...inventoryData, name: e.target.value })} style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }} />
+                            <select required value={inventoryData.category} onChange={e => setInventoryData({ ...inventoryData, category: e.target.value })} style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }}>
+                                <option value="">Select Category</option>
+                                {INVENTORY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                            <div style={{ display: "flex", gap: "10px" }}>
+                                <input type="number" required placeholder="Qty" value={inventoryData.quantity} onChange={e => setInventoryData({ ...inventoryData, quantity: Number(e.target.value) })} style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }} />
+                                <select value={inventoryData.unit} onChange={e => setInventoryData({ ...inventoryData, unit: e.target.value })} style={{ width: "80px", padding: "10px", borderRadius: "6px", border: "1px solid #ddd" }}>
+                                    {INVENTORY_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                                </select>
+                            </div>
+                            <label style={{ fontSize: "13px", color: "#666" }}>Expiry Date (Optional):
+                                <input type="date" value={inventoryData.expiryDate} onChange={e => setInventoryData({ ...inventoryData, expiryDate: e.target.value })} style={{ width: "100%", padding: "10px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} />
+                                <label style={{ display: "block", marginTop: "10px", fontWeight: "bold" }}>Reason for Update:</label>
+                                <textarea required placeholder="e.g., Stock correction, expired items, or restocked..." value={updateReason}
+                                    onChange={(e) => setUpdateReason(e.target.value)}
+                                    style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #ddd", minHeight: "60px", marginTop: "5px" }} />
+                            </label>
+                            <label style={{ fontSize: "13px", color: "#666" }}>Low Stock Threshold:
+                                <input type="number" value={inventoryData.threshold} onChange={e => setInventoryData({ ...inventoryData, threshold: Number(e.target.value) })} style={{ width: "100%", padding: "10px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} />
+                            </label>
+                            <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                                <button type="submit" style={{ flex: 1, background: "#2196F3", color: "white", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer" }}>{editingInventoryId ? "Update" : "Add"}</button>
+                                <button type="button" onClick={() => setShowInventoryModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* 4. Report Details Modal */}
+            {reportDetailModal && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
+                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "600px", maxHeight: "80vh", overflowY: "auto" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+                            <h3 style={{ margin: 0 }}>{reportDetailModal.title}</h3>
+                            <button onClick={() => setReportDetailModal(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer" }}>✕</button>
                         </div>
-                    </div>
-
-                    {/* --- NEW SUB-TABS --- */}
-                    <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
-                        <button 
-                            onClick={() => setInventoryFilter("All")} 
-                            style={{
-                                padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
-                                background: inventoryFilter === "All" ? "#2196F3" : "#e0e0e0",
-                                color: inventoryFilter === "All" ? "white" : "#333",
-                                fontSize: "12px"
-                            }}
-                        >
-                            All Items
-                        </button>
-                        <button 
-                            onClick={() => setInventoryFilter("LowStock")} 
-                            style={{
-                                padding: "8px 15px", borderRadius: "20px", border: "none", cursor: "pointer", fontWeight: "bold",
-                                background: inventoryFilter === "LowStock" ? "#ff9800" : "#e0e0e0",
-                                color: inventoryFilter === "LowStock" ? "white" : "#333",
-                                fontSize: "12px"
-                            }}
-                        >
-                            Low Stock/Out of Stock
-                        </button>
-                    </div>
-
-                    <input type="text" placeholder="Search Inventory..." value={inventorySearch} onChange={(e) => setInventorySearch(e.target.value)} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", width:"100%", boxSizing:"border-box"}}/>
-                    
-                    <div style={{flex:1, overflowY:"auto"}}>
-                        <table style={{width:"100%", borderCollapse:"collapse", fontSize:"14px"}}>
-                            <thead style={{background:"#f1f1f1", position:"sticky", top:0}}>
-                                <tr>
-                                    <th style={{padding:"10px", textAlign:"left"}}>Item Name</th>
-                                    <th style={{padding:"10px", textAlign:"left"}}>Category</th>
-                                    <th style={{padding:"10px", textAlign:"left"}}>Stock</th>
-                                    <th style={{padding:"10px", textAlign:"left"}}>Expiry</th>
-                                    <th style={{padding:"10px", textAlign:"left"}}>Status</th>
-                                    <th style={{padding:"10px", textAlign:"center"}}>Actions</th>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
+                            <thead>
+                                <tr style={{ background: "#f5f5f5", textAlign: "left" }}>
+                                    <th style={{ padding: "8px" }}>Date / Name</th>
+                                    <th style={{ padding: "8px" }}>Details</th>
+                                    {(reportDetailModal.type === 'added' || reportDetailModal.type === 'used') && <th style={{ padding: "8px" }}>Qty</th>}
                                 </tr>
                             </thead>
                             <tbody>
-                                {inventory
-                                    .filter(i => {
-                                        // Filter Logic: Check Search AND Check Tab Selection
-                                        const matchesSearch = i.name.toLowerCase().includes(inventorySearch.toLowerCase());
-                                        const matchesTab = inventoryFilter === "All" || i.quantity <= (i.threshold || 5);
-                                        return matchesSearch && matchesTab;
-                                    })
-                                    .map(item => {
-                                    const status = getStockStatus(item);
-                                    return (
-                                        <tr key={item.id} style={{borderBottom:"1px solid #eee"}}>
-                                            <td style={{padding:"10px"}}>{item.name}</td>
-                                            <td style={{padding:"10px"}}>{item.category}</td>
-                                            <td style={{padding:"10px", fontWeight:"bold"}}>{item.quantity} {item.unit}</td>
-                                            <td style={{padding:"10px", color: status.label === 'Expired' ? 'red' : 'inherit'}}>{item.expiryDate || "-"}</td>
-                                            <td style={{padding:"10px"}}><span style={{background:status.color, color:"white", padding:"3px 8px", borderRadius:"12px", fontSize:"11px"}}>{status.label}</span></td>
-                                            <td style={{padding:"10px", textAlign:"center"}}>
-                                                <button onClick={() => handleOpenEditInventory(item)} style={{background:"#2196F3", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", marginRight:"5px", cursor:"pointer", fontSize:"11px"}}>Edit</button>
-                                                <button onClick={() => handleDeleteInventory(item.id)} style={{background:"#f44336", color:"white", border:"none", padding:"5px 10px", borderRadius:"4px", cursor:"pointer", fontSize:"11px"}}>Delete</button>
+                                {reportDetailModal.data.length === 0 ? <tr><td colSpan="3" style={{ padding: "20px", textAlign: "center", color: "#999" }}>No data found</td></tr> :
+                                    reportDetailModal.data.map((item, i) => (
+                                        <tr key={i} style={{ borderBottom: "1px solid #eee" }}>
+                                            <td style={{ padding: "8px" }}>
+                                                {reportDetailModal.type.includes('appointments') ? item.date : (item.date ? item.date.toLocaleDateString() : item.name)}
                                             </td>
+                                            <td style={{ padding: "8px" }}>
+                                                {reportDetailModal.type.includes('appointments') ? `${item.petName} (${item.reason})` : (item.itemName || item.category)}
+                                                {item.reason && <div style={{ fontSize: "11px", color: "#777" }}>{item.reason}</div>}
+                                            </td>
+                                            {(reportDetailModal.type === 'added' || reportDetailModal.type === 'used') && (
+                                                <td style={{ padding: "8px", fontWeight: "bold" }}>{item.change ? Math.abs(item.change) : item.qty}</td>
+                                            )}
                                         </tr>
-                                    );
-                                })}
+                                    ))
+                                }
                             </tbody>
                         </table>
-                        {/* Optional: Message when list is empty */}
-                        {inventory.filter(i => (inventoryFilter === "All" || i.quantity <= (i.threshold || 5)) && i.name.toLowerCase().includes(inventorySearch.toLowerCase())).length === 0 && (
-                            <div style={{textAlign:"center", color:"#999", padding:"20px"}}>No items found.</div>
-                        )}
-                    </div>
-                 </div>
-            )}
-
-            {/* --- REPORTS TAB --- */}
-            {activeTab === "reports" && (
-                <div className="card" style={{ width: "100%", height: "100%", overflowY: "auto", padding: "30px", boxSizing: "border-box" }}>
-                    <div style={{maxWidth:"800px", margin:"0 auto"}}>
-                        <h2 style={{textAlign:"center", color:"#333", marginBottom:"30px"}}>Clinic Performance Reports</h2>
-                        
-                        <div style={{background:"#f5f5f5", padding:"20px", borderRadius:"12px", display:"flex", gap:"15px", alignItems:"center", justifyContent:"center", marginBottom:"30px", border:"1px solid #ddd"}}>
-                            <label><strong>From:</strong> <input type="date" value={reportStartDate} onChange={(e) => setReportStartDate(e.target.value)} style={{padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} /></label>
-                            <label><strong>To:</strong> <input type="date" value={reportEndDate} onChange={(e) => setReportEndDate(e.target.value)} style={{padding:"8px", borderRadius:"6px", border:"1px solid #ccc"}} /></label>
-                            {(reportStartDate && reportEndDate) && <button onClick={printSummaryReport} style={{marginLeft:"15px", background:"#607D8B", color:"white", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>🖨️ Print Summary</button>}
+                        <div style={{ marginTop: "20px", textAlign: "right" }}>
+                            <button onClick={() => setReportDetailModal(null)} style={{ background: "#ccc", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer" }}>Close</button>
                         </div>
-
-                        {(reportStartDate && reportEndDate) ? (
-                            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"20px"}}>
-                                {/* Inventory Stats Block */}
-                        <div style={{ background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
-                            <h4 style={{ marginTop: 0, color: "#444", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
-                        Inventory Overview
-                        </h4>
-    
-                        <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginTop: "15px" }}>
-                        {/* Total Count */}
-                        <div style={{ flex: "1", minWidth: "150px", borderRight: "1px solid #eee" }}>
-                        <div style={{ fontSize: "14px", color: "#888" }}>Total Unique Items</div>
-                        <div style={{ fontSize: "32px", fontWeight: "bold", color: "#2196F3" }}>
-                            {inventoryStats.totalItems}
-                        </div>
-                    <div style={{ fontSize: "12px", color: "#666" }}>Across {INVENTORY_CATEGORIES.length} categories</div>
-                </div>
-
-                    {/* Category Breakdown */}
-                <div style={{ flex: "2", minWidth: "250px", borderRight: "1px solid #eee" }}>
-                    <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Items by Category</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                    {Object.entries(inventoryStats.categoryCounts).map(([cat, count]) => (
-                        <div key={cat} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                            <span>{cat}:</span>
-                            <span style={{ fontWeight: "bold" }}>{count}</span>
-                        </div>
-                     ))}
-                </div>
-            </div>
-
-{/* Recently Added (Shows what was just added) */}
-        <div style={{ flex: "2", minWidth: "250px" }}>
-            <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Recently Added Stock</div>
-            {inventoryStats.recentActivity.length > 0 ? (
-                <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "#555" }}>
-                    {inventoryStats.recentActivity.map(log => (
-                        <li key={log.id} style={{ marginBottom: "5px" }}>
-                            <strong>{log.name}</strong> 
-                            {/* Shows "+5 boxes" in green */}
-                            <span style={{ color: "#2e7d32", fontWeight: "bold", marginLeft: "6px" }}>
-                                +{log.added} {log.unit}
-                            </span>
-                        </li>
-                    ))}
-                </ul>
-            ) : (
-                <div style={{ fontSize: "13px", color: "#aaa", fontStyle: "italic" }}>No recent additions</div>
-            )}
-        </div>
-    </div>
-</div>
-
-
-                                {/* Appointments Stats Block */}
-<div style={{ background: "white", padding: "20px", borderRadius: "12px", boxShadow: "0 2px 4px rgba(0,0,0,0.05)", marginBottom: "20px" }}>
-    <h4 style={{ marginTop: 0, color: "#444", borderBottom: "1px solid #eee", paddingBottom: "10px" }}>
-        📅 Appointment Overview
-    </h4>
-    
-    <div style={{ display: "flex", gap: "40px", flexWrap: "wrap", marginTop: "15px" }}>
-        {/* Total Count */}
-        <div style={{ flex: "1", minWidth: "150px", borderRight: "1px solid #eee" }}>
-            <div style={{ fontSize: "14px", color: "#888" }}>Total Appointments</div>
-            <div style={{ fontSize: "32px", fontWeight: "bold", color: "#4CAF50" }}>
-                {appointmentStats.totalAppts}
-            </div>
-            <div style={{ fontSize: "12px", color: "#666" }}>All time records</div>
-        </div>
-
-        {/* Reason Breakdown */}
-        <div style={{ flex: "2", minWidth: "250px", borderRight: "1px solid #eee" }}>
-            <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>By Visit Reason</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                {Object.entries(appointmentStats.reasonCounts).map(([reason, count]) => (
-                    count > 0 && (
-                        <div key={reason} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                            <span>{reason}:</span>
-                            <span style={{ fontWeight: "bold" }}>{count}</span>
-                        </div>
-                    )
-                ))}
-            </div>
-        </div>
-
-        {/* Upcoming List */}
-        <div style={{ flex: "2", minWidth: "250px" }}>
-            <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Upcoming Appointments</div>
-            {appointmentStats.upcoming.length > 0 ? (
-                <ul style={{ margin: 0, paddingLeft: "20px", fontSize: "13px", color: "#555" }}>
-                    {appointmentStats.upcoming.map(app => (
-                        <li key={app.id} style={{ marginBottom: "5px" }}>
-                            <strong>{app.date}</strong> - {app.petName} <span style={{color:"#999"}}>({app.reason})</span>
-                        </li>
-                    ))}
-                </ul>
-            ) : (
-                <div style={{ fontSize: "13px", color: "#aaa", fontStyle: "italic" }}>No upcoming appointments</div>
-            )}
-        </div>
-    </div>
-</div>
-                            </div>
-                        ) : (
-                            <div style={{textAlign:"center", color:"#888", padding:"50px", border:"2px dashed #ddd", borderRadius:"12px"}}>
-                                Please select a date range to generate the report.
-                            </div>
-                        )}
                     </div>
                 </div>
             )}
-            
-        </div>
-      </main>
 
-      {/* --- MODALS --- */}
-      {/* 1. Walk In Modal */}
-{showWalkInModal && (
-    <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-        <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%"}}>
-            <h3 style={{marginTop:0}}>New Walk-In Appointment</h3>
-            <form onSubmit={handleCreateWalkIn} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
-                
-                {/* --- UPDATED OWNER SELECTION --- */}
-                <div style={{ display: "flex", gap: "10px" }}>
-                    <select required value={walkInData.ownerId} onChange={e => setWalkInData({...walkInData, ownerId: e.target.value})} 
-                        style={{flex: 1, padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                        <option value="">Select Owner</option>
-                        {owners.map(o => <option key={o.id} value={o.id}>{o.firstName} {o.lastName}</option>)}
-                    </select>
-                    <button type="button" onClick={() => setShowRegisterModal(true)} 
-                        style={{ background: "#4CAF50", color: "white", border: "none", borderRadius: "6px", padding: "0 15px", cursor: "pointer", fontSize: "13px" }}>
-                        + New
-                    </button>
-                </div>
-
-                {walkInData.ownerId && (
-                    <select required value={walkInData.petId} onChange={e => {
-                        const pet = allPets.find(p => p.id === e.target.value);
-                        setWalkInData({...walkInData, petId: e.target.value, petName: pet?.name || ""});
-                    }} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                        <option value="">Select Pet</option>
-                        {allPets.filter(p => p.ownerId === walkInData.ownerId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                    </select>
-                )}
-                <input type="date" required value={walkInData.date} onChange={e => setWalkInData({...walkInData, date: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                <input type="time" required value={walkInData.time} onChange={e => setWalkInData({...walkInData, time: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                <select required value={walkInData.reason} onChange={e => setWalkInData({...walkInData, reason: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                    <option value="">Select Reason</option>
-                    {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-                <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                    <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Book</button>
-                    <button type="button" onClick={() => setShowWalkInModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-)}
-
-      {/* --- REGISTER NEW OWNER MODAL (Nested or Standalone) --- */}
-{showRegisterModal && (
-    <div style={{
-        position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
-        backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", 
-        alignItems: "center", zIndex: 3200 // Higher z-index than WalkIn modal
-    }}>
-        <div style={{
-            background: "white", padding: "25px", borderRadius: "12px", 
-            width: "400px", maxWidth: "90%", boxShadow: "0 4px 15px rgba(0,0,0,0.2)"
-        }}>
-            <h3 style={{ marginTop: 0, color: "#1976D2" }}>Register New Owner</h3>
-            
-            {registerError && (
-                <div style={{ 
-                    background: "#ffebee", color: "#d32f2f", padding: "10px", 
-                    borderRadius: "6px", fontSize: "13px", marginBottom: "15px" 
-                }}>
-                    {registerError}
+            {/* 5. Quick Usage Modal */}
+            {usageModal.show && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2100 }}>
+                    <div style={{ background: "white", padding: "20px", borderRadius: "12px", width: "300px", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}>
+                        <h3 style={{ margin: "0 0 15px 0", color: "#333" }}>Quick Use: {usageModal.item?.name}</h3>
+                        <div style={{ marginBottom: "20px" }}>
+                            <label style={{ display: "block", marginBottom: "5px", color: "#666" }}>Quantity to use:</label>
+                            <input type="number" min="1" value={usageModal.qty} onChange={(e) => setUsageModal({ ...usageModal, qty: parseInt(e.target.value) })} style={{ padding: "8px", width: "60px", textAlign: "center", fontSize: "16px", border: "1px solid #ccc", borderRadius: "4px" }} />
+                            <span style={{ marginLeft: "10px", color: "#555" }}>{usageModal.item?.unit}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "center", gap: "10px" }}>
+                            <button onClick={() => setUsageModal({ show: false, item: null, qty: 1 })} style={{ padding: "8px 15px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+                            <button onClick={confirmQuickUsage} style={{ padding: "8px 15px", background: "#FF9800", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Confirm</button>
+                        </div>
+                    </div>
                 </div>
             )}
 
-            <form onSubmit={handleRegisterOwner} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                <div style={{ display: "flex", gap: "10px" }}>
-                    <input 
-                        type="text" placeholder="First Name" required
-                        value={registerData.firstName}
-                        onChange={(e) => setRegisterData({...registerData, firstName: e.target.value})}
-                        style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
-                    />
-                    <input 
-                        type="text" placeholder="Last Name" required
-                        value={registerData.lastName}
-                        onChange={(e) => setRegisterData({...registerData, lastName: e.target.value})}
-                        style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
-                    />
+            {/* 6. Custom Confirmation Modal */}
+            {confirmModal.show && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000 }}>
+                    <div style={{
+                        background: "white", padding: "25px", borderRadius: "12px", width: "350px", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)"
+                    }}>
+                        <h3 style={{ margin: "0 0 15px 0", color: "#333" }}>Confirmation</h3>
+                        <p style={{ marginBottom: "25px", fontSize: "16px", color: "#666" }}>{confirmModal.message}</p>
+
+                        <div style={{ display: "flex", justifyContent: "center", gap: "15px" }}>
+                            <button
+                                onClick={() => setConfirmModal({ ...confirmModal, show: false })}
+                                style={{
+                                    padding: "10px 20px", background: "#e0e0e0", color: "#333",
+                                    border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"
+                                }}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={() => { confirmModal.onConfirm(); setConfirmModal({ ...confirmModal, show: false }); }}
+                                style={{
+                                    padding: "10px 20px", background: "#f44336", color: "white",
+                                    border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"
+                                }}
+                            >
+                                Yes
+                            </button>
+                        </div>
+                    </div>
                 </div>
+            )}
 
-                <input 
-                    type="email" placeholder="Email Address" required
-                    value={registerData.email}
-                    onChange={(e) => setRegisterData({...registerData, email: e.target.value})}
-                    style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" }}
-                />
-
-                <input 
-                    type="password" placeholder="Password (Min 8 chars)" required
-                    value={registerData.password}
-                    onChange={(e) => setRegisterData({...registerData, password: e.target.value})}
-                    style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" }}
-                />
-                
-                <input 
-                    type="password" placeholder="Confirm Password" required
-                    value={registerData.confirmPassword}
-                    onChange={(e) => setRegisterData({...registerData, confirmPassword: e.target.value})}
-                    style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ccc", width: "100%", boxSizing: "border-box" }}
-                />
-
-                <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-                    <button 
-                        type="submit" 
-                        disabled={registerLoading}
-                        style={{ 
-                            flex: 1, background: "#4CAF50", color: "white", padding: "10px", 
-                            border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" 
-                        }}
-                    >
-                        {registerLoading ? "Registering..." : "Create Account"}
-                    </button>
-                    <button 
-                        type="button" 
-                        onClick={() => setShowRegisterModal(false)}
-                        style={{ 
-                            flex: 1, background: "#ccc", color: "#333", padding: "10px", 
-                            border: "none", borderRadius: "6px", cursor: "pointer" 
-                        }}
-                    >
-                        Cancel
-                    </button>
+            {/* 7. Decline Reason Modal */}
+            {declineModal.show && (
+                <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000 }}>
+                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "400px", maxWidth: "90%" }}>
+                        <h3 style={{ marginTop: 0, color: "#d32f2f" }}>Decline Appointment</h3>
+                        <p style={{ fontSize: "14px", color: "#666" }}>Please provide a reason for the owner:</p>
+                        <textarea
+                            value={declineModal.reason}
+                            onChange={(e) => setDeclineModal({ ...declineModal, reason: e.target.value })}
+                            placeholder="e.g. Time slot unavailable, Doctor is out..."
+                            rows="3"
+                            style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #ddd", marginBottom: "15px", boxSizing: "border-box" }}
+                        />
+                        <div style={{ display: "flex", gap: "10px" }}>
+                            <button onClick={handleConfirmDecline} style={{ flex: 1, background: "#f44336", color: "white", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer", fontWeight: "bold" }}>Decline Request</button>
+                            <button onClick={() => setDeclineModal({ ...declineModal, show: false })} style={{ flex: 1, background: "#ccc", border: "none", padding: "10px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+                        </div>
+                    </div>
                 </div>
-            </form>
+            )}
         </div>
-    </div>
-)}
-
-      {/* 2. Consultation Modal */}
-      {showConsultModal && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"600px", maxWidth:"95%", maxHeight:"90vh", overflowY:"auto"}}>
-                  <h3 style={{marginTop:0, color:"#2196F3"}}>Consultation Form</h3>
-                  <form onSubmit={handleFinishConsultation} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
-                      <div style={{display:"flex", gap:"15px"}}>
-                          <label style={{flex:1}}><strong>Date:</strong><br/><input type="date" value={consultData.date} onChange={e => setConsultData({...consultData, date: e.target.value})} style={{width:"100%", padding:"8px", marginTop:"5px"}} /></label>
-                          <label style={{flex:1}}><strong>Reason:</strong><br/><input type="text" value={consultData.reason} readOnly style={{width:"100%", padding:"8px", marginTop:"5px", background:"#f5f5f5"}} /></label>
-                      </div>
-                      
-                      <div>
-                          <strong>Symptoms:</strong>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "5px", marginTop: "5px" }}>
-                              {SYMPTOM_OPTIONS.map(sym => (
-                                  <label key={sym} style={{display:"flex", alignItems:"center", gap:"6px", fontSize:"10px", cursor: "pointer", background: consultData.symptoms.includes(sym) ? "#e3f2fd" : "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", width: "100%", boxSizing: "border-box"}}>
-                                      <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)}
-                                      style={{ cursor: "pointer", accentColor: "#2196F3", width: "13px", height: "13px", margin: 0, appearance: "auto", WebkitAppearance: "auto" }} />
-                                      {sym} 
-                                  </label>
-                              ))}
-                          </div>
-                      </div>
-
-                      <label><strong>Diagnosis:</strong><br/>
-                        <input list="diagnosis-options" value={consultData.diagnosis} onChange={e => setConsultData({...consultData, diagnosis: e.target.value})} placeholder="Select or Type Diagnosis" style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                        <datalist id="diagnosis-options">{DIAGNOSIS_OPTIONS.map(d => <option key={d} value={d} />)}</datalist>
-                      </label>
-
-                      <label><strong>Treatment / Medicine:</strong><br/>
-                        <textarea value={consultData.medicine} onChange={e => setConsultData({...consultData, medicine: e.target.value})} rows="2" style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} placeholder="Prescribed meds or procedures..." />
-                      </label>
-
-                      <label><strong>Notes:</strong><br/>
-                        <textarea value={consultData.notes} onChange={e => setConsultData({...consultData, notes: e.target.value})} rows="2" style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} placeholder="Additional observations..." />
-                      </label>
-
-                      <label style={{background:"#e3f2fd", padding:"10px", borderRadius:"6px"}}>
-                          <strong>Schedule Follow-up (Optional):</strong><br/>
-                          <input type="date" value={consultData.followUp} onChange={e => setConsultData({...consultData, followUp: e.target.value})} style={{width:"100%", padding:"8px", marginTop:"5px", borderRadius:"6px", border:"1px solid #bbb"}} />
-                      </label>
-
-                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                          <button type="submit" style={{flex:1, background:"#4CAF50", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>Finish Consultation</button>
-                          <button type="button" onClick={() => setShowConsultModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                      </div>
-                  </form>
-              </div>
-          </div>
-      )}
-
-    {/* --- PRINT OPTIONS MODAL --- */}
-{showPrintModal && (
-    <div style={{
-        position: "fixed", top: 0, left: 0, width: "100%", height: "100%",
-        backgroundColor: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000
-    }}>
-        <div style={{
-            background: "white", padding: "30px", borderRadius: "12px", width: "350px", maxWidth: "90%",
-            boxShadow: "0 4px 20px rgba(0,0,0,0.2)", textAlign: "center", display: "flex", flexDirection: "column", gap: "15px"
-        }}>
-            <h3 style={{ margin: "0 0 10px 0", color: "#2c3e50" }}>Select Report Type</h3>
-            <p style={{ margin: 0, color: "#666", fontSize: "14px", marginBottom: "10px" }}>
-                Which inventory items would you like to print?
-            </p>
-
-            <button 
-                onClick={() => printInventoryReport("All")}
-                style={{ padding: "12px", borderRadius: "8px", border: "1px solid #ddd", background: "white", cursor: "pointer", fontWeight: "600", color: "#333", display:"flex", justifyContent:"center", gap:"10px" }}
-            >
-                All Stock
-            </button>
-
-            <button 
-                onClick={() => printInventoryReport("Low Stock")}
-                style={{ padding: "12px", borderRadius: "8px", border: "none", background: "#ff9800", cursor: "pointer", fontWeight: "600", color: "white", display:"flex", justifyContent:"center", gap:"10px" }}
-            >
-                Low Stock
-            </button>
-
-            <button 
-                onClick={() => printInventoryReport("Out of Stock")}
-                style={{ padding: "12px", borderRadius: "8px", border: "none", background: "#f44336", cursor: "pointer", fontWeight: "600", color: "white", display:"flex", justifyContent:"center", gap:"10px" }}
-            >
-                Out of Stock
-            </button>
-
-            <button 
-                onClick={() => setShowPrintModal(false)}
-                style={{ marginTop: "10px", background: "transparent", border: "none", color: "#999", cursor: "pointer", textDecoration: "underline" }}
-            >
-                Cancel
-            </button>
-        </div>
-    </div>
-)}
-
-      {/* 3. Inventory Add/Edit Modal */}
-      {showInventoryModal && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px"}}>
-                  <h3 style={{marginTop:0}}>{editingInventoryId ? "Edit Item" : "Add New Item"}</h3>
-                  <form onSubmit={handleSaveInventory} style={{display:"flex", flexDirection:"column", gap:"15px"}}>
-                      <input type="text" required placeholder="Item Name" value={inventoryData.name} onChange={e => setInventoryData({...inventoryData, name: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                      <select required value={inventoryData.category} onChange={e => setInventoryData({...inventoryData, category: e.target.value})} style={{padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                          <option value="">Select Category</option>
-                          {INVENTORY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                      <div style={{display:"flex", gap:"10px"}}>
-                          <input type="number" required placeholder="Qty" value={inventoryData.quantity} onChange={e => setInventoryData({...inventoryData, quantity: Number(e.target.value)})} style={{flex:1, padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                          <select value={inventoryData.unit} onChange={e => setInventoryData({...inventoryData, unit: e.target.value})} style={{width:"80px", padding:"10px", borderRadius:"6px", border:"1px solid #ddd"}}>
-                              {INVENTORY_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                          </select>
-                      </div>
-                      <label style={{fontSize:"13px", color:"#666"}}>Expiry Date (Optional):
-                          <input type="date" value={inventoryData.expiryDate} onChange={e => setInventoryData({...inventoryData, expiryDate: e.target.value})} style={{width:"100%", padding:"10px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                      </label>
-                      <label style={{fontSize:"13px", color:"#666"}}>Low Stock Threshold:
-                          <input type="number" value={inventoryData.threshold} onChange={e => setInventoryData({...inventoryData, threshold: Number(e.target.value)})} style={{width:"100%", padding:"10px", marginTop:"5px", borderRadius:"6px", border:"1px solid #ddd"}} />
-                      </label>
-                      <div style={{display:"flex", gap:"10px", marginTop:"10px"}}>
-                          <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>{editingInventoryId ? "Update" : "Add"}</button>
-                          <button type="button" onClick={() => setShowInventoryModal(false)} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                      </div>
-                  </form>
-              </div>
-          </div>
-      )}
-
-      {/* 4. Report Details Modal */}
-      {reportDetailModal && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"600px", maxHeight:"80vh", overflowY:"auto"}}>
-                  <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"20px"}}>
-                      <h3 style={{margin:0}}>{reportDetailModal.title}</h3>
-                      <button onClick={() => setReportDetailModal(null)} style={{background:"none", border:"none", fontSize:"20px", cursor:"pointer"}}>✕</button>
-                  </div>
-                  <table style={{width:"100%", borderCollapse:"collapse", fontSize:"14px"}}>
-                      <thead>
-                          <tr style={{background:"#f5f5f5", textAlign:"left"}}>
-                              <th style={{padding:"8px"}}>Date / Name</th>
-                              <th style={{padding:"8px"}}>Details</th>
-                              {(reportDetailModal.type === 'added' || reportDetailModal.type === 'used') && <th style={{padding:"8px"}}>Qty</th>}
-                          </tr>
-                      </thead>
-                      <tbody>
-                          {reportDetailModal.data.length === 0 ? <tr><td colSpan="3" style={{padding:"20px", textAlign:"center", color:"#999"}}>No data found</td></tr> : 
-                           reportDetailModal.data.map((item, i) => (
-                               <tr key={i} style={{borderBottom:"1px solid #eee"}}>
-                                   <td style={{padding:"8px"}}>
-                                       {reportDetailModal.type.includes('appointments') ? item.date : (item.date ? item.date.toLocaleDateString() : item.name)}
-                                   </td>
-                                   <td style={{padding:"8px"}}>
-                                       {reportDetailModal.type.includes('appointments') ? `${item.petName} (${item.reason})` : (item.itemName || item.category)}
-                                       {item.reason && <div style={{fontSize:"11px", color:"#777"}}>{item.reason}</div>}
-                                   </td>
-                                   {(reportDetailModal.type === 'added' || reportDetailModal.type === 'used') && (
-                                       <td style={{padding:"8px", fontWeight:"bold"}}>{item.change ? Math.abs(item.change) : item.qty}</td>
-                                   )}
-                               </tr>
-                           ))
-                          }
-                      </tbody>
-                  </table>
-                  <div style={{marginTop:"20px", textAlign:"right"}}>
-                       <button onClick={() => setReportDetailModal(null)} style={{background:"#ccc", border:"none", padding:"8px 15px", borderRadius:"6px", cursor:"pointer"}}>Close</button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* 5. Quick Usage Modal */}
-      {usageModal.show && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2100}}>
-              <div style={{background:"white", padding:"20px", borderRadius:"12px", width:"300px", textAlign:"center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)"}}>
-                  <h3 style={{margin: "0 0 15px 0", color: "#333"}}>Quick Use: {usageModal.item?.name}</h3>
-                  <div style={{marginBottom:"20px"}}>
-                      <label style={{display:"block", marginBottom:"5px", color:"#666"}}>Quantity to use:</label>
-                      <input type="number" min="1" value={usageModal.qty} onChange={(e) => setUsageModal({ ...usageModal, qty: parseInt(e.target.value) })} style={{padding: "8px", width: "60px", textAlign: "center", fontSize: "16px", border: "1px solid #ccc", borderRadius: "4px"}} />
-                      <span style={{marginLeft:"10px", color:"#555"}}>{usageModal.item?.unit}</span>
-                  </div>
-                  <div style={{display: "flex", justifyContent: "center", gap: "10px"}}>
-                      <button onClick={() => setUsageModal({ show: false, item: null, qty: 1 })} style={{padding: "8px 15px", background: "#e0e0e0", color: "#333", border: "none", borderRadius: "6px", cursor: "pointer"}}>Cancel</button>
-                      <button onClick={confirmQuickUsage} style={{padding: "8px 15px", background: "#FF9800", color: "white", border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"}}>Confirm</button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* 6. Custom Confirmation Modal */}
-      {confirmModal.show && (
-          <div className="modal-overlay" style={{position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 3000}}>
-              <div style={{
-                  background: "white", padding: "25px", borderRadius: "12px", width: "350px", textAlign: "center", boxShadow: "0 4px 20px rgba(0,0,0,0.2)"
-              }}>
-                  <h3 style={{margin: "0 0 15px 0", color: "#333"}}>Confirmation</h3>
-                  <p style={{marginBottom: "25px", fontSize: "16px", color: "#666"}}>{confirmModal.message}</p>
-                  
-                  <div style={{display: "flex", justifyContent: "center", gap: "15px"}}>
-                      <button 
-                          onClick={() => setConfirmModal({ ...confirmModal, show: false })} 
-                          style={{
-                              padding: "10px 20px", background: "#e0e0e0", color: "#333", 
-                              border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"
-                          }}
-                      >
-                          Cancel
-                      </button>
-                      <button 
-                          onClick={() => { confirmModal.onConfirm(); setConfirmModal({ ...confirmModal, show: false }); }} 
-                          style={{
-                              padding: "10px 20px", background: "#f44336", color: "white", 
-                              border: "none", borderRadius: "6px", cursor: "pointer", fontWeight: "bold"
-                          }}
-                      >
-                          Yes
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
-
-      {/* 7. Decline Reason Modal */}
-      {declineModal.show && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:3000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"400px", maxWidth:"90%"}}>
-                  <h3 style={{marginTop:0, color:"#d32f2f"}}>Decline Appointment</h3>
-                  <p style={{fontSize:"14px", color:"#666"}}>Please provide a reason for the owner:</p>
-                  <textarea 
-                      value={declineModal.reason} 
-                      onChange={(e) => setDeclineModal({...declineModal, reason: e.target.value})}
-                      placeholder="e.g. Time slot unavailable, Doctor is out..."
-                      rows="3"
-                      style={{width:"100%", padding:"10px", borderRadius:"6px", border:"1px solid #ddd", marginBottom:"15px", boxSizing:"border-box"}}
-                  />
-                  <div style={{display:"flex", gap:"10px"}}>
-                      <button onClick={handleConfirmDecline} style={{flex:1, background:"#f44336", color:"white", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer", fontWeight:"bold"}}>Decline Request</button>
-                      <button onClick={() => setDeclineModal({ ...declineModal, show: false })} style={{flex:1, background:"#ccc", border:"none", padding:"10px", borderRadius:"6px", cursor:"pointer"}}>Cancel</button>
-                  </div>
-              </div>
-          </div>
-      )}
-    </div>
-  );
+    );
 };
 
 export default StaffDashboard;
