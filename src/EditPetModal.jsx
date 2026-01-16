@@ -176,7 +176,6 @@ const EditPetModal = ({ pet, onClose }) => {
                 >
                     <option value="Dog">Dog</option>
                     <option value="Cat">Cat</option>
-                    <option value="Other">Other</option>
                 </select>
                 
                 {/* Show text input if "Other" is selected */}

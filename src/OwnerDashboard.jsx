@@ -727,7 +727,8 @@ const OwnerDashboard = () => {
             reason: "Check-up", 
             status: "Pending", 
             createdAt: new Date(), 
-            isSeenByOwner: false
+            isSeenByOwner: false,
+            read: false
         });
         showToast("Appointment Requested!");
         setApptFilter("Pending");
@@ -1251,14 +1252,17 @@ const OwnerDashboard = () => {
                       </div>
                       
                       {/* Species - Full Width */}
-                      <div>
-                          <label style={labelStyle}>Species</label>
-                          <select value={species} onChange={(e) => setSpecies(e.target.value)} style={selectStyle}>
-                              <option value="Dog">Dog</option>
-                              <option value="Cat">Cat</option>
-                              <option value="Other">Other</option>
-                          </select>
-                      </div>
+                      <div style={{ marginBottom: "10px" }}>
+    <label>Species</label>
+    <select 
+        value={species} // or registerData.species
+        onChange={(e) => setSpecies(e.target.value)} // or setRegisterData...
+        style={{ width: "100%", padding: "8px", marginTop: "5px" }}
+    >
+        <option value="Dog">Dog</option>
+        <option value="Cat">Cat</option>
+    </select>
+</div>
 
                       {/* Breed - Full Width (Appears Below Species) */}
                       <div>
@@ -1275,7 +1279,7 @@ const OwnerDashboard = () => {
                       </div>
 
                       {/* Conditional: If "Other" species or "Other" breed selected, show text box */}
-                      {(species === "Other" || (breed === "Other" && ["Dog", "Cat"].includes(species))) && (
+                      {(breed === "Other" && ["Dog", "Cat"].includes(species)) && (
                           <div>
                               <label style={labelStyle}>Specify {species === "Other" ? "Species" : "Breed"}</label>
                               <input type="text" placeholder={species === "Other" ? "e.g. Turtle" : "e.g. Labradoodle"} value={species === "Other" ? otherSpecies : otherBreed} onChange={(e) => species === "Other" ? setOtherSpecies(e.target.value) : setOtherBreed(e.target.value)} style={inputStyle} />

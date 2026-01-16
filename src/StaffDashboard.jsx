@@ -11,7 +11,13 @@ const VISIT_REASONS = [
     "Routine Check-up",
     "Follow-up Check-up",
     "Vaccination",
-    "Deworming"
+    "Deworming",
+    "Emergency"
+];
+
+const VACCINE_TYPES = [
+    "5-in-1 (Dog)", "6-in-1 (Dog)", "8-in-1 (Dog)", "Anti-Rabies", 
+    "Kennel Cough", "4-in-1 (Cat)", "Tricat (Cat)", "Deworming"
 ];
 
 const SYMPTOM_OPTIONS = [
@@ -76,7 +82,6 @@ const StaffDashboard = () => {
 
     // --- Notification States ---
     const [showNotifications, setShowNotifications] = useState(false);
-    const [setReadNotifIds] = useState([]);
     const [adminNotifs] = useState([]);
     
     // Toast State
@@ -104,25 +109,51 @@ const StaffDashboard = () => {
 
     const [apptSubTab, setApptSubTab] = useState("Approved");
     const [approvedFilter, setApprovedFilter] = useState("Active");
+    
     // Consultation Form State
     const [showConsultModal, setShowConsultModal] = useState(false);
     const [selectedApptId, setSelectedApptId] = useState(null);
 
+    // --- REVISED CONSULT DATA STATE FOR MULTIPLE REASONS ---
     const [consultData, setConsultData] = useState({
-    date: new Date().toISOString().split('T')[0],
-    reason: [],
-    symptoms: [],
-    otherSymptom: "",
-    diagnosis: "",
-    otherDiagnosis: "",
-    notes: "",
-    followUp: "",
-    // --- MULTIPLE MEDICINE STATES ---
-    prescriptionList: [], 
-    tempItemId: "",      // Stores dropdown selection
-    tempQty: 1,          // Stores quantity for the selected item
-    tempDispense: true   // Stores deduction toggle for the selected item
-});
+        date: new Date().toISOString().split('T')[0],
+        // Array of objects for reasons
+        reasons: [{ type: "Routine Check-up", vaccineType: "", nextSchedule: "" }], 
+        symptoms: [],
+        otherSymptom: "",
+        diagnosis: "",
+        otherDiagnosis: "",
+        notes: "",
+        prescriptionList: [],
+        tempItemId: "",
+        tempQty: 1,
+        tempDispense: true,
+        otherMedicine: "",
+        followUp: ""
+    });
+
+    // Helper to add a new reason line
+    const addReason = () => {
+        setConsultData(prev => ({
+            ...prev,
+            reasons: [...prev.reasons, { type: "Routine Check-up", vaccineType: "", nextSchedule: "" }]
+        }));
+    };
+
+    // Helper to remove a reason line
+    const removeReason = (index) => {
+        if (consultData.reasons.length <= 1) return; // Prevent removing last one
+        const newReasons = [...consultData.reasons];
+        newReasons.splice(index, 1);
+        setConsultData({ ...consultData, reasons: newReasons });
+    };
+
+    // Helper to update a specific reason line
+    const updateReasonLine = (index, field, value) => {
+        const newReasons = [...consultData.reasons];
+        newReasons[index][field] = value;
+        setConsultData({ ...consultData, reasons: newReasons });
+    };
 
     // Records / Pet List State
     const [petSearch, setPetSearch] = useState("");
@@ -153,7 +184,7 @@ const StaffDashboard = () => {
         onConfirm: () => { }
     });
 
-    const [isSavingInventory, setIsSavingInventory] = useState(false); // Add this
+    const [isSavingInventory, setIsSavingInventory] = useState(false);
 
     // --- DECLINE REASON MODAL STATE ---
     const [declineModal, setDeclineModal] = useState({
@@ -233,7 +264,6 @@ const StaffDashboard = () => {
     }, []);
 
     useEffect(() => {
-        // Listen for users with role 'owner'
         const q = query(collection(db, "users"), where("role", "==", "owner"));
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const ownersList = snapshot.docs.map(doc => ({
@@ -247,24 +277,27 @@ const StaffDashboard = () => {
     }, []);
 
     useEffect(() => {
-        // If no owner is selected in the Walk-in form, clear the pet list
         if (!walkInData.ownerId) {
             setFilteredPets([]);
             return;
         }
 
-        // Listen for pets belonging specifically to the selected owner
+        // 1. Update the Query: Remove the strict 'isArchived' check here
         const q = query(
             collection(db, "pets"),
-            where("ownerId", "==", walkInData.ownerId),
-            where("isArchived", "==", false)
+            where("ownerId", "==", walkInData.ownerId)
         );
 
+        // 2. Update the Snapshot: Filter manually in JavaScript
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const petsList = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data()
-            }));
+            const petsList = snapshot.docs
+                .map(doc => ({
+                    id: doc.id,
+                    ...doc.data()
+                }))
+                // This filter allows pets to show if 'isArchived' is false OR if the field is missing/undefined
+                .filter(pet => pet.isArchived !== true); 
+
             setFilteredPets(petsList);
         });
 
@@ -353,7 +386,6 @@ const StaffDashboard = () => {
         return { totalAppts, reasonCounts, upcoming };
     }, [appointments]);
 
-    // --- AUTO-MARK AS READ LOGIC ---
     useEffect(() => {
         if (activeTab === "messages" && selectedChatOwner) {
             const unreadMsgs = allMessages.filter(
@@ -372,7 +404,6 @@ const StaffDashboard = () => {
         }
     }, [activeTab, selectedChatOwner, allMessages]);
 
-    // --- DATE NORMALIZER ---
     const normalizeDate = (dateInput) => {
         if (!dateInput) return "";
         let d = new Date(dateInput);
@@ -385,7 +416,6 @@ const StaffDashboard = () => {
         return "";
     };
 
-    // --- HELPERS ---
     const getUnreadCount = (ownerId) => allMessages.filter(m => m.senderId === ownerId && !m.read && m.senderId !== "AI_BOT").length;
     const totalUnreadMessages = allMessages.filter(m => m.senderId !== auth.currentUser?.uid && !m.read && m.senderId !== "AI_BOT").length;
 
@@ -395,7 +425,7 @@ const StaffDashboard = () => {
         return { label: "In Stock", color: "#4CAF50" };
     };
 
-    // --- PRINT SUMMARY REPORT ---
+    // --- UPDATED PRINT SUMMARY REPORT ---
     const printSummaryReport = () => {
         const iframe = document.createElement('iframe');
         iframe.style.position = 'fixed';
@@ -418,7 +448,6 @@ const StaffDashboard = () => {
             return exp <= warningDate;
         }).sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate)).slice(0, 5);
 
-        // Using recentStockLogs
         const recentStockLogs = inventoryLogs
             .filter(log => log.change > 0)
             .sort((a, b) => b.timestamp - a.timestamp)
@@ -428,15 +457,8 @@ const StaffDashboard = () => {
                 return { ...log, unit: item ? item.unit : "units" };
             });
 
-        const totalAppts = appointments.length;
-        const reasonCounts = {};
-        VISIT_REASONS.forEach(r => reasonCounts[r] = 0);
-        appointments.forEach(app => {
-            const r = app.reason || "Other";
-            reasonCounts[r] = (reasonCounts[r] || 0) + 1;
-        });
+        const completedAppts = appointments.filter(a => a.isCompleted).sort((a, b) => new Date(b.date) - new Date(a.date));
 
-        // Using upcomingAppts
         const upcomingAppts = appointments
             .filter(app => app.date >= today.toISOString().split('T')[0] && app.status !== "Cancelled")
             .sort((a, b) => a.date.localeCompare(b.date))
@@ -479,14 +501,6 @@ const StaffDashboard = () => {
                     </div>
 
                     <div class="card">
-                        <h3>📅 Appointments</h3>
-                        <div>Total: <b>${totalAppts}</b></div>
-                        <ul style="margin-top:10px;">
-                            ${Object.entries(reasonCounts).filter(([, c]) => c > 0).map(([k, v]) => `<li>${k}: ${v}</li>`).join('')}
-                        </ul>
-                    </div>
-
-                    <div class="card">
                         <h3>📥 Recent Stock Additions</h3>
                         <ul>
                             ${recentStockLogs.length > 0 ? recentStockLogs.map(log => `
@@ -505,6 +519,20 @@ const StaffDashboard = () => {
                     </div>
                 </div>
 
+                <h3>Appointment History (Completed)</h3>
+                <table>
+                    <thead><tr><th>Date</th><th>Pet Name</th><th>Reason</th><th>Staff/Vet</th></tr></thead>
+                    <tbody>
+                        ${completedAppts.length > 0 ? completedAppts.map(app => `
+                            <tr>
+                                <td>${app.date}</td>
+                                <td>${app.petName}</td>
+                                <td>${app.reason}</td>
+                                <td>${app.staffId ? "Staff" : "-"}</td>
+                            </tr>`).join('') : '<tr><td colspan="4">No completed appointments</td></tr>'}
+                    </tbody>
+                </table>
+                <br/>
                 <h3>Detailed Inventory</h3>
                 <table>
                     <thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Status</th></tr></thead>
@@ -534,7 +562,6 @@ const StaffDashboard = () => {
         }, 500);
     };
 
-    // --- UPDATED PRINT INVENTORY REPORT ---
     const printInventoryReport = (filterType = "All") => {
         const printWindow = window.open('', '_blank');
         const today = new Date().toLocaleDateString();
@@ -624,7 +651,6 @@ const StaffDashboard = () => {
     // --- ACTIONS ---
     const handleStatusUpdate = async (id, newStatus) => { await updateDoc(doc(db, "appointments", id), { status: newStatus, staffId: auth.currentUser.uid }); };
 
-    // --- DECLINE ACTIONS ---
     const openDeclineModal = (apptId) => {
         setDeclineModal({ show: true, apptId, reason: "" });
     };
@@ -647,7 +673,6 @@ const StaffDashboard = () => {
         }
     };
 
-    // --- INVENTORY ACTIONS ---
     const handleOpenAddInventory = () => {
         setEditingInventoryId(null);
         setInventoryData({ name: "", category: "", quantity: 0, unit: "pcs", expiryDate: "", threshold: 5 });
@@ -701,7 +726,6 @@ const StaffDashboard = () => {
         e.preventDefault();
         if (isSavingInventory) return;
 
-        // Check if reason is provided
         if (!updateReason.trim()) {
             return showToast("Please provide a reason for the Admin.", "error");
         }
@@ -709,10 +733,6 @@ const StaffDashboard = () => {
         setIsSavingInventory(true);
 
         try {
-            // UPDATED: Create a request in "edit_requests" collection
-            // Instead of direct update, we send the new data to Admin
-            
-            // Get original data if editing
             let originalData = {};
             if (editingInventoryId) {
                 const item = inventory.find(i => i.id === editingInventoryId);
@@ -722,7 +742,7 @@ const StaffDashboard = () => {
             await addDoc(collection(db, "edit_requests"), {
                 type: "inventory",
                 action: "add",
-                itemId: editingInventoryId || null, // null if it's a new item request
+                itemId: editingInventoryId || null,
                 itemName: inventoryData.name,
                 originalData: originalData,
                 newData: { ...inventoryData },
@@ -750,7 +770,6 @@ const StaffDashboard = () => {
         const trimmedFirstName = registerData.firstName.trim();
         const trimmedLastName = registerData.lastName.trim();
 
-        // 1. Strict Name Validation
         if (!nameRegex.test(trimmedFirstName)) {
             return setRegisterError("First Name must only contain letters (no numbers or symbols).");
         }
@@ -758,7 +777,6 @@ const StaffDashboard = () => {
             return setRegisterError("Last Name must only contain letters (no numbers or symbols).");
         }
 
-        // 2. Password Match Validation
         if (registerData.password !== registerData.confirmPassword) {
             return setRegisterError("Passwords do not match.");
         }
@@ -767,11 +785,9 @@ const StaffDashboard = () => {
         setRegisterError("");
 
         try {
-            // 1. Create the User Account in Firebase Auth
             const userCredential = await createUserWithEmailAndPassword(auth, registerData.email, registerData.password);
             const newUser = userCredential.user;
 
-            // 2. Save Owner Profile to "users" collection
             await setDoc(doc(db, "users", newUser.uid), {
                 firstName: trimmedFirstName,
                 lastName: trimmedLastName,
@@ -780,7 +796,6 @@ const StaffDashboard = () => {
                 createdAt: new Date()
             });
 
-            // 3. Save Pet Details to "pets" collection
             const petDocRef = await addDoc(collection(db, "pets"), {
                 ownerId: newUser.uid,
                 name: registerData.petName.trim(),
@@ -794,7 +809,6 @@ const StaffDashboard = () => {
                 createdAt: new Date()
             });
 
-            // 4. Update Walk-In Form state
             if (typeof setWalkInData === "function") {
                 setWalkInData(prev => ({
                     ...prev,
@@ -803,10 +817,7 @@ const StaffDashboard = () => {
                 }));
             }
 
-            if (typeof showToast === "function") {
-                showToast("Owner and Pet registered successfully!", "success");
-            }
-
+            showToast("Owner and Pet registered successfully!", "success");
             setShowRegisterModal(false);
 
             setRegisterData({
@@ -841,11 +852,18 @@ const StaffDashboard = () => {
 
         const existingSymptoms = appt.symptoms ? appt.symptoms.split(", ") : [];
 
+        // Parse initial reason. If it's just a string, make it the first array item.
+        const initialReason = appt.reason ? 
+            [{ type: appt.reason, vaccineType: "", nextSchedule: "" }] : 
+            [{ type: "Routine Check-up", vaccineType: "", nextSchedule: "" }];
+
         setConsultData({
             date: scheduledDate || new Date().toISOString().split('T')[0],
-            reason: appt.reason || "",
+            reasons: initialReason,
             symptoms: existingSymptoms,
             diagnosis: appt.diagnosis || "",
+            otherSymptom: "",
+            otherDiagnosis: "",
             medicine: appt.medicine || "",
             notes: appt.notes || "",
             followUp: "",
@@ -853,114 +871,173 @@ const StaffDashboard = () => {
             tempItemId: "",
             tempQty: 1,
             tempDispense: true,
+            otherMedicine: ""
         });
         setShowConsultModal(true);
     };
 
     const addItemToPrescription = () => {
-    if (!consultData.tempItemId) return showToast("Select an item first.", "error");
-    
-    const item = inventory.find(i => i.id === consultData.tempItemId);
-    const isOther = consultData.tempItemId === "Other";
+        if (!consultData.tempItemId) return showToast("Select an item first.", "error");
+        
+        const item = inventory.find(i => i.id === consultData.tempItemId);
+        const isOther = consultData.tempItemId === "Other";
 
-    const newItem = {
-        id: consultData.tempItemId,
-        name: isOther ? consultData.otherMedicine : item.name,
-        qty: consultData.tempQty,
-        dispense: isOther ? false : consultData.tempDispense,
-        unit: item?.unit || "unit(s)"
+        const newItem = {
+            id: consultData.tempItemId,
+            name: isOther ? consultData.otherMedicine : item.name,
+            qty: consultData.tempQty,
+            dispense: isOther ? false : consultData.tempDispense,
+            unit: item?.unit || "unit(s)"
+        };
+
+        setConsultData(prev => ({
+            ...prev,
+            prescriptionList: [...prev.prescriptionList, newItem],
+            tempItemId: "",
+            tempQty: 1,
+            otherMedicine: ""
+        }));
     };
 
-    setConsultData(prev => ({
-        ...prev,
-        prescriptionList: [...prev.prescriptionList, newItem],
-        tempItemId: "",
-        tempQty: 1,
-        otherMedicine: ""
-    }));
-};
-
-    // --- RE-ADDED MISSING FUNCTION WRAPPER HERE ---
     const handleFinishConsultation = async (e) => {
     e.preventDefault();
 
     // 1. Validations
-    if (consultData.prescriptionList.length === 0) {
-        return showToast("Please add at least one treatment/medicine to the list.", "error");
+    const hasCheckup = consultData.reasons.some(r => 
+        r.type === "Routine Check-up" || 
+        r.type === "Follow-up Check-up" || 
+        r.type === "Emergency"
+    );
+    const hasVaccine = consultData.reasons.some(r => 
+        r.type === "Vaccination" || 
+        r.type === "Deworming"
+    );
+
+    // UPDATED: Only require prescriptionList if it's a checkup/emergency
+    // If it's JUST Vaccination/Deworming, the list can be empty
+    if (hasCheckup && consultData.prescriptionList.length === 0) {
+        return showToast("Please add at least one treatment/medicine for this check-up.", "error");
     }
-    if (!consultData.diagnosis) return showToast("Please select a diagnosis.", "error");
+    
+    // Conditional validation for Diagnosis
+    if (hasCheckup && !consultData.diagnosis) {
+        return showToast("Please select a diagnosis for the check-up.", "error");
+    }
 
-    const apptDoc = appointments.find(a => a.id === selectedApptId);
-    setRegisterLoading(true);
+    // Validation for Vaccine Type
+    if (hasVaccine) {
+       const incompleteVaccine = consultData.reasons.find(r => 
+           (r.type === "Vaccination" || r.type === "Deworming") && !r.vaccineType
+       );
+       if (incompleteVaccine) return showToast("Please specify the Vaccine/Deworming Type.", "error");
+    }
 
-    try {
-        // 2. Loop & Deduct Inventory Stock
-        for (const item of consultData.prescriptionList) {
-            if (item.id !== "Other" && item.dispense) {
-                const invItem = inventory.find(i => i.id === item.id);
-                if (invItem) {
-                    const itemRef = doc(db, "inventory", item.id);
-                    await updateDoc(itemRef, {
-                        quantity: Number(invItem.quantity) - item.qty,
-                        lastUpdated: new Date()
-                    });
+        const apptDoc = appointments.find(a => a.id === selectedApptId);
+        setRegisterLoading(true);
 
-                    await addDoc(collection(db, "inventoryLogs"), {
-                        itemId: item.id,
-                        itemName: item.name,
-                        change: -item.qty,
-                        reason: `Dispensed: Appt ${selectedApptId}`,
-                        timestamp: new Date()
-                    });
+        try {
+            // 2. Loop & Deduct Inventory Stock
+            for (const item of consultData.prescriptionList) {
+                if (item.id !== "Other" && item.dispense) {
+                    const invItem = inventory.find(i => i.id === item.id);
+                    if (invItem) {
+                        const itemRef = doc(db, "inventory", item.id);
+                        await updateDoc(itemRef, {
+                            quantity: Number(invItem.quantity) - item.qty,
+                            lastUpdated: new Date()
+                        });
+
+                        await addDoc(collection(db, "inventoryLogs"), {
+                            itemId: item.id,
+                            itemName: item.name,
+                            change: -item.qty,
+                            reason: `Dispensed: Appt ${selectedApptId}`,
+                            timestamp: new Date()
+                        });
+                    }
                 }
             }
+
+            // 3. Create Permanent Medical Record
+            const treatmentSummary = consultData.prescriptionList
+                .map(p => `${p.name} (x${p.qty})`).join(", ");
+
+            // Flatten reasons for summary string
+            const reasonSummary = consultData.reasons.map(r => r.type).join(", ");
+            const diagnosisSummary = hasCheckup ? (consultData.diagnosis === "Other" ? consultData.otherDiagnosis : consultData.diagnosis) : "N/A (Vaccination/Routine)";
+
+            await addDoc(collection(db, "medical_records"), {
+                apptId: selectedApptId,
+                petId: apptDoc.petId,
+                petName: apptDoc.petName,
+                ownerId: apptDoc.ownerId,
+                date: consultData.date,
+                reason: reasonSummary,
+                detailedReasons: consultData.reasons, // Store the array for future detail views
+                diagnosis: diagnosisSummary,
+                treatment: treatmentSummary,
+                prescriptionDetails: consultData.prescriptionList,
+                notes: consultData.notes,
+                followUpDate: consultData.followUp,
+                staffId: auth.currentUser.uid,
+                createdAt: new Date()
+            });
+
+            // 4. Update Appointment
+            await updateDoc(doc(db, "appointments", selectedApptId), {
+                status: "Done",
+                isCompleted: true,
+                diagnosis: diagnosisSummary, // Update main appt doc for easy listing
+                reason: reasonSummary,
+                completedAt: new Date()
+            });
+
+            showToast("Consultation Saved Successfully!", "success");
+            setShowConsultModal(false);
+
+        } catch (err) {
+            console.error(err);
+            showToast("Error: " + err.message, "error");
+        } finally {
+            setRegisterLoading(false);
         }
+    };
 
-        // 3. Create Permanent Medical Record
-        const treatmentSummary = consultData.prescriptionList
-            .map(p => `${p.name} (x${p.qty})`).join(", ");
+    // --- AUTO-CANCEL PAST DUE APPOINTMENTS (UPDATED: 20 MINUTES) ---
+    useEffect(() => {
+        const checkPastDue = async () => {
+            const now = new Date();
+            const twentyMinutesAgo = new Date(now.getTime() - 30 * 60 * 1000); // 30 minutes buffer
 
-        await addDoc(collection(db, "medical_records"), {
-            apptId: selectedApptId,
-            petId: apptDoc.petId,
-            petName: apptDoc.petName,
-            ownerId: apptDoc.ownerId,
-            date: consultData.date,
-            diagnosis: consultData.diagnosis === "Other" ? consultData.otherDiagnosis : consultData.diagnosis,
-            treatment: treatmentSummary,
-            prescriptionDetails: consultData.prescriptionList,
-            notes: consultData.notes,
-            staffId: auth.currentUser.uid,
-            createdAt: new Date()
-        });
+            appointments.forEach(async (appt) => {
+                if (appt.status === "Approved" && !appt.isCompleted) {
+                    const apptDate = new Date(`${appt.date}T${appt.time}`);
+                    // If appointment time is passed by 20 mins and no consultation happened
+                    if (apptDate < twentyMinutesAgo) {
+                        try {
+                            await updateDoc(doc(db, "appointments", appt.id), {
+                                status: "Cancelled",
+                                reason: "System: Auto-cancelled (No Show / 20 mins Past Due)"
+                            });
+                            console.log(`Auto-cancelled appointment ${appt.id}`);
+                        } catch (err) {
+                            console.error("Error auto-cancelling:", err);
+                        }
+                    }
+                }
+            });
+        };
 
-        // 4. Update Appointment
-        await updateDoc(doc(db, "appointments", selectedApptId), {
-            status: "Approved",
-            isCompleted: true,
-            completedAt: new Date()
-        });
+        const timer = setInterval(checkPastDue, 60000); // Check every minute
+        return () => clearInterval(timer);
+    }, [appointments]);
 
-        showToast("Consultation Saved Successfully!", "success");
-        setShowConsultModal(false);
-        // Reset state here...
-
-    } catch (err) {
-        console.error(err);
-        showToast("Error: " + err.message, "error");
-    } finally {
-        setRegisterLoading(false);
-    }
-};
-
-// --- NEW: FETCH MEDICAL RECORDS WHEN VIEWING A PET ---
     useEffect(() => {
         if (!viewingPet) {
-            setPetRecords([]); // Clear records if no pet is selected
+            setPetRecords([]); 
             return;
         }
 
-        // Query the 'medical_records' collection for this specific pet
         const q = query(
             collection(db, "medical_records"),
             where("petId", "==", viewingPet.id),
@@ -1097,7 +1174,6 @@ const StaffDashboard = () => {
             const isToday = normalizeDate(new Date()) === dateStr;
             const isSaturday = currentCellDate.getDay() === 6;
 
-            // --- FILTER: exclude cancelled, done, and completed appointments ---
             const dayAppts = appointments.filter(a => normalizeDate(a.date) === dateStr && a.status !== "Cancelled" && a.status !== "Done" && !a.isCompleted);
 
             cells.push(
@@ -1143,7 +1219,6 @@ const StaffDashboard = () => {
                             const dateStr = normalizeDate(d);
                             const isSaturday = d.getDay() === 6;
                             const slotAppts = appointments.filter(a => {
-                                // --- FILTER: exclude cancelled, done, and completed appointments ---
                                 if (a.status === 'Cancelled' || a.status === 'Done' || a.isCompleted || normalizeDate(a.date) !== dateStr) return false;
                                 const apptHour = parseInt(a.time.split(':')[0]);
                                 return apptHour === h;
@@ -1184,6 +1259,7 @@ const StaffDashboard = () => {
             id: a.id,
             type: 'appointment',
             text: `New Request Appointment: ${a.petName}`,
+            read: a.read === undefined ? false : a.read, 
             date: a.createdAt?.toDate() || new Date(),
             linkTab: 'appointments'
         });
@@ -1200,10 +1276,25 @@ const StaffDashboard = () => {
 };
 
     const notificationList = getNotifications();
-    const unreadCount = notificationList.length;
+    const unreadCount = useMemo(() => {
+    return notificationList.filter(notif => notif.read === false).length;
+}, [notificationList]);
 
-    const handleNotificationClick = (notif) => {
-        setReadNotifIds(prev => [...prev, notif.id]);
+    const handleNotificationClick = async (notif) => {
+        // 1. Mark as read in Firestore
+        try {
+            if (notif.type === 'message') {
+                // Remove 'msg-' prefix if it exists to get the actual document ID
+                const msgId = notif.id.startsWith('msg-') ? notif.id.replace('msg-', '') : notif.id;
+                await updateDoc(doc(db, "messages", msgId), { read: true });
+            } else if (notif.type === 'appointment') {
+                await updateDoc(doc(db, "appointments", notif.id), { read: true });
+            }
+        } catch (err) {
+            console.error("Error updating read status:", err);
+        }
+
+        // 2. Navigation logic
         setActiveTab(notif.linkTab);
         if (notif.linkSubTab) setApptSubTab(notif.linkSubTab);
         if (notif.type === 'message' && notif.ownerData) setSelectedChatOwner(notif.ownerData);
@@ -1211,23 +1302,25 @@ const StaffDashboard = () => {
     };
 
     const handleMarkAllRead = async () => {
-        const currentIds = notificationList.map(n => n.id);
-        setReadNotifIds(prev => [...prev, ...currentIds]);
-        notificationList.forEach(async (notif) => {
-            try {
-                if (notif.type === 'message') {
-                    // For messages, we find all unread messages from that sender
-                    const senderId = notif.id.replace('msg-', '');
-                    const unreadMsgs = allMessages.filter(m => m.senderId === senderId && !m.read);
-                    unreadMsgs.forEach(async (msg) => {
-                        await updateDoc(doc(db, "messages", msg.id), { read: true });
-                    });
-                } else if (notif.type === 'appointment') {
-                    await updateDoc(doc(db, "appointments", notif.id), { read: true });
-                }
-            } catch (err) { console.error("Error marking as read:", err); }
-        });
-    };
+    // 1. Get only the notifications that are actually unread
+    const unreadNotifs = notificationList.filter(n => !n.read);
+    
+    // 2. Update them all in parallel
+    await Promise.all(unreadNotifs.map(async (notif) => {
+        try {
+            if (notif.type === 'message') {
+                // Remove the 'msg-' prefix to get the actual document ID in the "messages" collection
+                const msgId = notif.id.replace('msg-', '');
+                await updateDoc(doc(db, "messages", msgId), { read: true });
+            } else if (notif.type === 'appointment') {
+                // Update the appointment document
+                await updateDoc(doc(db, "appointments", notif.id), { read: true });
+            }
+        } catch (err) {
+            console.error("Error marking as read:", err);
+        }
+    }));
+};
 
     const getTabStyle = (name) => ({
         padding: "15px",
@@ -1259,32 +1352,69 @@ const StaffDashboard = () => {
                 <div style={{ display: "flex", gap: "15px", alignItems: "center" }}>
 
                     <div style={{ position: "relative" }}>
-                        <button onClick={() => {
-                            if (!showNotifications) { handleMarkAllRead(); }
+    <button onClick={() => {
+    // If the menu is currently closed and we are opening it
+    if (!showNotifications) { 
+        handleMarkAllRead(); // This triggers the database update
+    }
+    setShowNotifications(!showNotifications);
+}}
+style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer", position: "relative" }}>
+    🔔
+    {/* The dot disappears when unreadCount reaches 0 */}
+    {unreadCount > 0 && (
+        <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>
+            {unreadCount}
+        </span>
+    )}
+</button>
 
-                            setShowNotifications(!showNotifications);
-                        }}
-                            style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer" }}>
-                            🔔{unreadCount > 0 && <span style={{ position: "absolute", top: "-5px", right: "-5px", background: "red", color: "white", fontSize: "11px", borderRadius: "50%", padding: "3px 6px", fontWeight: "bold" }}>{unreadCount}</span>}
-                        </button>
-                        {showNotifications && (
-                            <div style={{ position: "absolute", top: "50px", right: "0", width: "320px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>
-                                    <h4 style={{ margin: 0 }}>Notifications</h4>
-                                    <button onClick={handleMarkAllRead} style={{ fontSize: "11px", border: "none", background: "none", color: "#2196F3", cursor: "pointer" }}>Mark all read</button>
-                                </div>
-                                <div style={{ maxHeight: "300px", overflowY: "auto" }}>
-                                    {notificationList.length === 0 ? <p style={{ color: "#888" }}>No new notifications.</p> : (
-                                        notificationList.map((notif, index) => (
-                                            <div key={index} onClick={() => handleNotificationClick(notif)} style={{ padding: "12px", borderBottom: "1px solid #f1f1f1", cursor: "pointer", display: "flex", alignItems: "start", gap: "10px" }}>
-                                                <span style={{ fontSize: "16px" }}>{notif.type === 'appointment' ? '📅' : notif.type === 'message' ? '💬' : '⭐'}</span>
-                                                <div><div style={{ fontSize: "13px", fontWeight: "500", color: "#333" }}>{notif.text}</div></div>
-                                            </div>
-                                        )))}
+    {showNotifications && (
+        <div style={{ position: "absolute", top: "50px", right: "0", width: "320px", background: "white", boxShadow: "0 5px 15px rgba(0,0,0,0.2)", borderRadius: "12px", zIndex: 1000, padding: "15px", border: "1px solid #eee" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px", borderBottom: "1px solid #eee", paddingBottom: "5px" }}>
+                <h4 style={{ margin: 0 }}>Notifications</h4>
+                <button onClick={handleMarkAllRead} style={{ fontSize: "11px", border: "none", background: "none", color: "#2196F3", cursor: "pointer" }}>
+                    Mark all read
+                </button>
+            </div>
+            <div style={{ maxHeight: "300px", overflowY: "auto" }}>
+                {notificationList.length === 0 ? (
+                    <p style={{ color: "#888" }}>No new notifications.</p>
+                ) : (
+                    notificationList.map((notif, index) => (
+                        <div 
+                            key={index} 
+                            onClick={() => handleNotificationClick(notif)} 
+                            style={{ 
+                                padding: "12px", 
+                                borderBottom: "1px solid #f1f1f1", 
+                                cursor: "pointer", 
+                                display: "flex", 
+                                alignItems: "start", 
+                                gap: "10px",
+                                // Added: Highlight unread items with a light blue background
+                                background: notif.read ? "transparent" : "#f0f7ff" 
+                            }}
+                        >
+                            <span style={{ fontSize: "16px" }}>
+                                {notif.type === 'appointment' ? '📅' : notif.type === 'message' ? '💬' : '⭐'}
+                            </span>
+                            <div>
+                                <div style={{ 
+                                    fontSize: "13px", 
+                                    fontWeight: notif.read ? "400" : "600", // Bold if unread
+                                    color: "#333" 
+                                }}>
+                                    {notif.text}
                                 </div>
                             </div>
-                        )}
-                    </div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    )}
+</div>
                     <button onClick={handleLogout} className="action-btn" style={{ background: "#ffebee", color: "#d32f2f" }}>Logout</button>
                 </div>
             </nav>
@@ -1363,7 +1493,6 @@ const StaffDashboard = () => {
                                     {/* 3. Filtered List Logic */}
                                     <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
                                         {(() => {
-                                            // Filter Logic: If Approved, split by isCompleted. Else, show all (for Pending/Cancelled).
                                             let displayAppts = filteredAppointments;
                                             if (apptSubTab === "Approved") {
                                                 displayAppts = filteredAppointments.filter(a =>
@@ -1381,30 +1510,27 @@ const StaffDashboard = () => {
                                                         <div style={{ fontWeight: "bold", fontSize: "16px" }}>
                                                             {appt.petName}
                                                             <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}> ({appt.type || 'Regular'})</span>
-                                                            {/* Visual tag for Completed items */}
                                                             {appt.isCompleted && <span style={{ marginLeft: "8px", fontSize: "10px", background: "#4CAF50", color: "white", padding: "2px 6px", borderRadius: "4px" }}>DONE</span>}
                                                         </div>
                                                         <div style={{ fontSize: "12px", color: "#555" }}>{appt.date} at {appt.time}</div>
                                                         <div style={{ fontSize: "11px", color: "#777" }}>Reason: {appt.reason}</div>
                                                     </div>
                                                     <div style={{ display: "flex", gap: "10px" }}>
-                                                        {/* Pending Actions */}
+                                                        {/* OUTLINED BUTTONS UI */}
                                                         {appt.status === "Pending" && (
                                                             <>
-                                                                <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{ background: "#4CAF50", color: "white", padding: "8px 12px", border: "none", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
-                                                                <button onClick={() => openDeclineModal(appt.id)} className="action-btn" style={{ background: "#f44336", color: "white", padding: "8px 12px", border: "none", borderRadius: "6px", cursor: "pointer" }}>Decline</button>
+                                                                <button onClick={() => handleStatusUpdate(appt.id, "Approved")} className="action-btn" style={{ background: "transparent", border: "1px solid #4CAF50", color: "#4CAF50", padding: "8px 12px", borderRadius: "6px", cursor: "pointer" }}>Approve</button>
+                                                                <button onClick={() => openDeclineModal(appt.id)} className="action-btn" style={{ background: "transparent", border: "1px solid #f44336", color: "#f44336", padding: "8px 12px", borderRadius: "6px", cursor: "pointer" }}>Decline</button>
                                                             </>
                                                         )}
 
-                                                        {/* Approved Actions (Only show for Active) */}
                                                         {appt.status === "Approved" && !appt.isCompleted && (
                                                             <>
-                                                                <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{ background: "#2196F3", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500" }}>Consultation</button>
-                                                                <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{ background: "#f44336", color: "white", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500" }}>Cancel</button>
+                                                                <button onClick={() => openConsultModal(appt.id)} className="action-btn" style={{ background: "transparent", border: "1px solid #2196F3", color: "#2196F3", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500" }}>Consultation</button>
+                                                                <button onClick={() => handleStatusUpdate(appt.id, "Cancelled")} className="action-btn" style={{ background: "transparent", border: "1px solid #f44336", color: "#f44336", padding: "8px 12px", borderRadius: "6px", cursor: "pointer", fontSize: "12px", fontWeight: "500" }}>Cancel</button>
                                                             </>
                                                         )}
 
-                                                        {/* Completed Actions (View Only) */}
                                                         {appt.status === "Approved" && appt.isCompleted && (
                                                             <button disabled style={{ background: "#e0e0e0", color: "#888", border: "none", padding: "8px 12px", borderRadius: "6px", cursor: "default", fontSize: "12px" }}>Completed</button>
                                                         )}
@@ -1418,7 +1544,7 @@ const StaffDashboard = () => {
                         </div>
                     )}
                     
-                    {/* --- RECORDS TAB (UPDATED) --- */}
+                    {/* --- RECORDS TAB --- */}
                     {activeTab === "records" && (
                         <div className="card" style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: "20px", boxSizing: "border-box" }}>
                             <h3>Pet Records</h3>
@@ -1426,7 +1552,6 @@ const StaffDashboard = () => {
                                 Total: {filteredRecords.length}
                             </span>
 
-                            {/* Filter Controls */}
                             <div style={{ display: "flex", gap: "15px", marginBottom: "15px" }}>
                                 <input
                                     type="text"
@@ -1460,7 +1585,6 @@ const StaffDashboard = () => {
 
                             <div style={{ flex: 1, overflowY: "auto" }}>
                                 {viewingPet ? (
-            /* --- FIXED: Removed nested duplicate block here --- */
             <div>
             <button 
                 onClick={() => setViewingPet(null)} 
@@ -1479,7 +1603,6 @@ const StaffDashboard = () => {
 
                 <h3 style={{ color: "#1976D2", marginBottom: "15px" }}>🩺 Medical History</h3>
 
-                {/* Uses the 'petRecords' state we added earlier */}
                 {petRecords.length === 0 ? (
                     <div style={{ padding: "20px", background: "#f9f9f9", borderRadius: "8px", textAlign: "center", color: "#888", border: "1px dashed #ccc" }}>
                         No medical records found for this pet.
@@ -1489,7 +1612,7 @@ const StaffDashboard = () => {
                         <thead>
                             <tr style={{ background: "#2196F3", color: "white", textAlign: "left" }}>
                                 <th style={{ padding: "12px 10px", borderRadius: "6px 0 0 0" }}>Date</th>
-                                <th style={{ padding: "12px 10px" }}>Diagnosis</th>
+                                <th style={{ padding: "12px 10px" }}>Diagnosis/Reason</th>
                                 <th style={{ padding: "12px 10px" }}>Treatment / Meds</th>
                                 <th style={{ padding: "12px 10px" }}>Notes</th>
                                 <th style={{ padding: "12px 10px", borderRadius: "0 6px 0 0" }}>Vet</th>
@@ -1499,9 +1622,11 @@ const StaffDashboard = () => {
                             {petRecords.map((record, idx) => (
                                 <tr key={record.id || idx} style={{ borderBottom: "1px solid #eee", background: idx % 2 === 0 ? "white" : "#f9f9f9" }}>
                                     <td style={{ padding: "12px 10px", verticalAlign: "top" }}><strong>{record.date}</strong></td>
-                                    <td style={{ padding: "12px 10px", verticalAlign: "top", color: "#d32f2f", fontWeight: "500" }}>{record.diagnosis}</td>
+                                    <td style={{ padding: "12px 10px", verticalAlign: "top", color: "#d32f2f", fontWeight: "500" }}>
+                                        {record.diagnosis}
+                                        {record.reason && <div style={{fontSize: "10px", color: "#666"}}>{record.reason}</div>}
+                                    </td>
                                     
-                                    {/* Displays List of Medicines properly */}
                                     <td style={{ padding: "12px 10px", verticalAlign: "top" }}>
                                         {record.prescriptionList && record.prescriptionList.length > 0 ? (
                                             <ul style={{ margin: 0, paddingLeft: "15px", listStyleType: "circle" }}>
@@ -1649,7 +1774,6 @@ const StaffDashboard = () => {
                                 </div>
                             </div>
 
-                            {/* --- NEW SUB-TABS --- */}
                             <div style={{ display: "flex", gap: "10px", marginBottom: "15px" }}>
                                 <button
                                     onClick={() => setInventoryFilter("All")}
@@ -1692,7 +1816,6 @@ const StaffDashboard = () => {
                                     <tbody>
                                         {inventory
                                             .filter(i => {
-                                                // Filter Logic: Check Search AND Check Tab Selection
                                                 const matchesSearch = i.name.toLowerCase().includes(inventorySearch.toLowerCase());
                                                 const matchesTab = inventoryFilter === "All" || i.quantity <= (i.threshold || 5);
                                                 return matchesSearch && matchesTab;
@@ -1716,14 +1839,12 @@ const StaffDashboard = () => {
                                             })}
                                     </tbody>
                                 </table>
-                                {/* Optional: Message when list is empty */}
                                 {inventory.filter(i => (inventoryFilter === "All" || i.quantity <= (i.threshold || 5)) && i.name.toLowerCase().includes(inventorySearch.toLowerCase())).length === 0 && (
                                     <div style={{ textAlign: "center", color: "#999", padding: "20px" }}>No items found.</div>
                                 )}
                             </div>
                         </div>
                     )}
-
 
                     {/* --- REPORTS TAB --- */}
                     {activeTab === "reports" && (
@@ -1768,7 +1889,7 @@ const StaffDashboard = () => {
                                                     </div>
                                                 </div>
 
-                                                {/* Recently Added (Shows what was just added) */}
+                                                {/* Recently Added */}
                                                 <div style={{ flex: "2", minWidth: "250px" }}>
                                                     <div style={{ fontSize: "14px", color: "#888", marginBottom: "10px" }}>Recently Added Stock</div>
                                                     {inventoryStats.recentActivity.length > 0 ? (
@@ -1776,7 +1897,6 @@ const StaffDashboard = () => {
                                                             {inventoryStats.recentActivity.map(log => (
                                                                 <li key={log.id} style={{ marginBottom: "5px" }}>
                                                                     <strong>{log.name}</strong>
-                                                                    {/* Shows "+5 boxes" in green */}
                                                                     <span style={{ color: "#2e7d32", fontWeight: "bold", marginLeft: "6px" }}>
                                                                         +{log.added} {log.unit}
                                                                     </span>
@@ -1860,7 +1980,6 @@ const StaffDashboard = () => {
                         <h3 style={{ marginTop: 0 }}>New Walk-In Appointment</h3>
                         <form onSubmit={handleCreateWalkIn} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
 
-                            {/* --- UPDATED OWNER SELECTION --- */}
                             <div style={{ display: "flex", gap: "10px" }}>
                                 <select required value={walkInData.ownerId}
                                     onChange={(e) => setWalkInData({ ...walkInData, ownerId: e.target.value })}
@@ -1984,7 +2103,9 @@ const StaffDashboard = () => {
                                                 onChange={(e) => setRegisterData({ ...registerData, petName: e.target.value })}
                                                 style={{ flex: 2, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
                                             />
+                                            {/* STRICT SPECIES SELECTION */}
                                             <select
+                                                required
                                                 value={registerData.species}
                                                 onChange={(e) => setRegisterData({ ...registerData, species: e.target.value, breed: "" })}
                                                 style={{ flex: 1, padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
@@ -2082,161 +2203,203 @@ const StaffDashboard = () => {
                 </div>
             )}
 
-            {/* 2. Consultation Modal */}
+            {/* --- CONSULTATION MODAL (OVERHAULED) --- */}
             {showConsultModal && (
                 <div className="modal-overlay" style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 2000 }}>
-                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "600px", maxWidth: "95%", maxHeight: "90vh", overflowY: "auto" }}>
+                    <div style={{ background: "white", padding: "25px", borderRadius: "12px", width: "700px", maxWidth: "95%", maxHeight: "90vh", overflowY: "auto" }}>
                         <h3 style={{ marginTop: 0, color: "#2196F3" }}>Consultation Form</h3>
                         <form onSubmit={handleFinishConsultation} style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
-                            <div style={{ display: "flex", gap: "15px" }}>
-                                <label style={{ flex: 1 }}><strong>Date:</strong><br /><input type="date" required value={consultData.date} onChange={e => setConsultData({ ...consultData, date: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px" }} /></label>
-                                <label style={{ flex: 1 }}><strong>Reason:</strong><br /><input type="text" value={consultData.reason} readOnly style={{ width: "100%", padding: "8px", marginTop: "5px", background: "#f5f5f5" }} /></label>
+                            
+                            {/* DATE AND MULTIPLE REASONS */}
+                            <div style={{ background: "#f9f9f9", padding: "15px", borderRadius: "8px", border: "1px solid #eee" }}>
+                                <label style={{ display: "block", marginBottom: "10px" }}><strong>Date:</strong> <input type="date" required value={consultData.date} onChange={e => setConsultData({ ...consultData, date: e.target.value })} style={{ padding: "5px", borderRadius: "4px", border: "1px solid #ddd" }} /></label>
+                                
+                                <label style={{ display: "block", marginBottom: "5px" }}><strong>Reasons for Visit:</strong></label>
+                                {consultData.reasons.map((reason, idx) => (
+                                    <div key={idx} style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "8px" }}>
+                                        <select 
+                                            value={reason.type} 
+                                            onChange={(e) => updateReasonLine(idx, "type", e.target.value)}
+                                            style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
+                                        >
+                                            {VISIT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                                        </select>
+                                        
+                                        {/* Conditional Inputs per Reason Line */}
+                                        {(reason.type === "Vaccination" || reason.type === "Deworming") && (
+                                            <>
+                                                <select 
+                                                    value={reason.vaccineType} 
+                                                    onChange={(e) => updateReasonLine(idx, "vaccineType", e.target.value)}
+                                                    style={{ flex: 1, padding: "8px", borderRadius: "4px", border: "1px solid #ccc" }}
+                                                    required
+                                                >
+                                                    <option value="">Select Type</option>
+                                                    {VACCINE_TYPES.map(vt => <option key={vt} value={vt}>{vt}</option>)}
+                                                </select>
+                                                <input 
+                                                    type="date" 
+                                                    placeholder="Next Schedule"
+                                                    value={reason.nextSchedule}
+                                                    onChange={(e) => updateReasonLine(idx, "nextSchedule", e.target.value)}
+                                                    style={{ width: "130px", padding: "7px", borderRadius: "4px", border: "1px solid #ccc" }}
+                                                />
+                                            </>
+                                        )}
+
+                                        {consultData.reasons.length > 1 && (
+                                            <button type="button" onClick={() => removeReason(idx)} style={{ color: "red", border: "none", background: "none", cursor: "pointer", fontWeight: "bold" }}>✕</button>
+                                        )}
+                                    </div>
+                                ))}
+                                <button type="button" onClick={addReason} style={{ fontSize: "12px", color: "#2196F3", border: "none", background: "none", cursor: "pointer", fontWeight: "bold" }}>+ Add Another Reason</button>
                             </div>
 
-                            {/* SYMPTOMS SECTION */}
-                            <div>
-                                <strong>Symptoms:</strong>
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "5px", marginTop: "5px" }}>
-                                    {SYMPTOM_OPTIONS.map(sym => (
-                                        <label key={sym} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px", cursor: "pointer", background: consultData.symptoms.includes(sym) ? "#e3f2fd" : "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ddd", width: "100%", boxSizing: "border-box" }}>
-                                            <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)}
-                                                style={{ cursor: "pointer", accentColor: "#2196F3", width: "13px", height: "13px", margin: 0 }} />
-                                            {sym}
-                                        </label>
-                                    ))}
+                            {/* CONDITIONAL SECTIONS BASED ON SELECTED REASONS */}
+                            {consultData.reasons.some(r => r.type === "Routine Check-up" || r.type === "Follow-up Check-up" || r.type === "Emergency") && (
+                                <div style={{ border: "1px solid #FF9800", padding: "15px", borderRadius: "8px", background: "#fff3e0" }}>
+                                    <h4 style={{ marginTop: 0, color: "#bf360c" }}>Check-up Details</h4>
+                                    
+                                    {/* SYMPTOMS */}
+                                    <div style={{ marginBottom: "10px" }}>
+                                        <strong>Symptoms:</strong>
+                                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "5px", marginTop: "5px" }}>
+                                            {SYMPTOM_OPTIONS.map(sym => (
+                                                <label key={sym} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "10px", cursor: "pointer", background: consultData.symptoms.includes(sym) ? "#ffe0b2" : "white", padding: "4px 8px", borderRadius: "4px", border: "1px solid #ffcc80", width: "100%", boxSizing: "border-box" }}>
+                                                    <input type="checkbox" checked={consultData.symptoms.includes(sym)} onChange={() => handleSymptomChange(sym)}
+                                                        style={{ cursor: "pointer", accentColor: "#ef6c00", width: "13px", height: "13px", margin: 0 }} />
+                                                    {sym}
+                                                </label>
+                                            ))}
+                                        </div>
+                                        {consultData.symptoms.includes("Other") && (
+                                            <input type="text" placeholder="Specify symptoms..." value={consultData.otherSymptom} onChange={e => setConsultData({ ...consultData, otherSymptom: e.target.value })}
+                                                style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #ffcc80", fontSize: "12px" }}
+                                            />
+                                        )}
+                                    </div>
+
+                                    {/* DIAGNOSIS */}
+                                    <label><strong>Diagnosis:</strong><br />
+                                        <select value={consultData.diagnosis} onChange={e => setConsultData({ ...consultData, diagnosis: e.target.value })}
+                                            style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ffcc80" }}
+                                        >
+                                            <option value="">Select Diagnosis</option>
+                                            {DIAGNOSIS_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                                        </select>
+                                        {consultData.diagnosis === "Other" && (
+                                            <input type="text" placeholder="Specify diagnosis..." value={consultData.otherDiagnosis} onChange={e => setConsultData({ ...consultData, otherDiagnosis: e.target.value })}
+                                                style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #ffcc80", fontSize: "12px" }}
+                                            />
+                                        )}
+                                    </label>
                                 </div>
-                                {/* SPECIFY BOX */}
-                                {consultData.symptoms.includes("Other") && (
-                                    <input type="text" placeholder="Please specify other symptoms..." required value={consultData.otherSymptom} onChange={e => setConsultData({ ...consultData, otherSymptom: e.target.value })}
-                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
-                                    />
-                                )}
-                            </div>
-
-                            {/* DIAGNOSIS SECTION */}
-                            <label><strong>Diagnosis:</strong><br />
-                                <select required value={consultData.diagnosis} onChange={e => setConsultData({ ...consultData, diagnosis: e.target.value })}
-                                    style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }}
-                                >
-                                    <option value="">Select Diagnosis</option>
-                                    {DIAGNOSIS_OPTIONS.map(d => <option key={d} value={d}>{d}</option>)}
-                                </select>
-                                {/* SPECIFY BOX */}
-                                {consultData.diagnosis === "Other" && (
-                                    <input type="text" placeholder="Please specify other diagnosis..." required value={consultData.otherDiagnosis} onChange={e => setConsultData({ ...consultData, otherDiagnosis: e.target.value })}
-                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
-                                    />
-                                )}
-                            </label>
+                            )}
 
                             {/* TREATMENT/MEDICINE SECTION */}
-<div style={{ border: "1px solid #ddd", padding: "10px", borderRadius: "8px", marginTop: "10px", marginBottom: "15px" }}>
-    <label style={{ fontWeight: "bold", fontSize: "14px" }}>Add Treatments/Medicines</label>
-    
-    {/* Input Row */}
-    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px", alignItems: "center" }}>
-        <select 
-            style={{ flex: 2, minWidth: "200px", padding: "8px" }}
-            value={consultData.tempItemId}
-            onChange={(e) => setConsultData({
-                ...consultData, 
-                tempItemId: e.target.value,
-                tempDispense: true // Default to true when picking a new item
-            })}
-        >
-            <option value="">-- Select Item --</option>
-            {inventory.filter(i => i.quantity > 0).map(item => (
-                <option key={item.id} value={item.id}>
-                    {item.name} ({item.quantity} left)
-                </option>
-            ))}
-            <option value="Other">Other / Not in Inventory</option>
-        </select>
+                            <div style={{ border: "1px solid #ddd", padding: "10px", borderRadius: "8px" }}>
+                                <label style={{ fontWeight: "bold", fontSize: "14px" }}>Add Treatments/Medicines</label>
+                                
+                                {/* Input Row */}
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px", alignItems: "center" }}>
+                                    <select 
+                                        style={{ flex: 2, minWidth: "200px", padding: "8px" }}
+                                        value={consultData.tempItemId}
+                                        onChange={(e) => setConsultData({
+                                            ...consultData, 
+                                            tempItemId: e.target.value,
+                                            tempDispense: true
+                                        })}
+                                    >
+                                        <option value="">-- Select Item --</option>
+                                        {inventory.filter(i => i.quantity > 0).map(item => (
+                                            <option key={item.id} value={item.id}>
+                                                {item.name} ({item.quantity} left)
+                                            </option>
+                                        ))}
+                                        <option value="Other">Other / Not in Inventory</option>
+                                    </select>
 
-        <input 
-            type="number" 
-            min="1" 
-            placeholder="Qty"
-            style={{ width: "60px", padding: "8px" }}
-            value={consultData.tempQty}
-            onChange={(e) => setConsultData({...consultData, tempQty: parseInt(e.target.value) || 1})}
-        />
-        
-        <button 
-            type="button" 
-            onClick={addItemToPrescription} 
-            style={{ background: "#4CAF50", color: "white", border: "none", padding: "8px 15px", borderRadius: "4px", cursor: "pointer" }}
-        >
-            Add
-        </button>
-    </div>
+                                    <input 
+                                        type="number" 
+                                        min="1" 
+                                        placeholder="Qty"
+                                        style={{ width: "60px", padding: "8px" }}
+                                        value={consultData.tempQty}
+                                        onChange={(e) => setConsultData({...consultData, tempQty: parseInt(e.target.value) || 1})}
+                                    />
+                                    
+                                    <button 
+                                        type="button" 
+                                        onClick={addItemToPrescription} 
+                                        style={{ background: "#4CAF50", color: "white", border: "none", padding: "8px 15px", borderRadius: "4px", cursor: "pointer" }}
+                                    >
+                                        Add
+                                    </button>
+                                </div>
 
-    {/* Dispense Checkbox (Only if inventory item is selected) */}
-    {consultData.tempItemId && consultData.tempItemId !== "Other" && (
-        <div style={{ marginTop: "8px", background: "#f9f9f9", padding: "5px 10px", borderRadius: "4px", fontSize: "12px", display: "inline-block" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", color: "#333" }}>
-                <input 
-                    type="checkbox" 
-                    checked={consultData.tempDispense}
-                    onChange={(e) => setConsultData({ ...consultData, tempDispense: e.target.checked })}
-                />
-                Dispense & Deduct Stock
-            </label>
-        </div>
-    )}
+                                {consultData.tempItemId && consultData.tempItemId !== "Other" && (
+                                    <div style={{ marginTop: "8px", background: "#f9f9f9", padding: "5px 10px", borderRadius: "4px", fontSize: "12px", display: "inline-block" }}>
+                                        <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", color: "#333" }}>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={consultData.tempDispense}
+                                                onChange={(e) => setConsultData({ ...consultData, tempDispense: e.target.checked })}
+                                            />
+                                            Dispense & Deduct Stock
+                                        </label>
+                                    </div>
+                                )}
 
-    {/* 'Other' Specification Box */}
-    {consultData.tempItemId === "Other" && (
-        <textarea
-            placeholder="Specify treatment name..."
-            required
-            rows="1"
-            value={consultData.otherMedicine || ""}
-            onChange={e => setConsultData({ ...consultData, otherMedicine: e.target.value })}
-            style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
-        />
-    )}
+                                {consultData.tempItemId === "Other" && (
+                                    <textarea
+                                        placeholder="Specify treatment name..."
+                                        rows="1"
+                                        value={consultData.otherMedicine || ""}
+                                        onChange={e => setConsultData({ ...consultData, otherMedicine: e.target.value })}
+                                        style={{ width: "100%", padding: "8px", marginTop: "8px", borderRadius: "6px", border: "1px solid #2196F3", fontSize: "12px" }}
+                                    />
+                                )}
 
-    {/* The List of Added Items */}
-    <div style={{ marginTop: "10px" }}>
-        {consultData.prescriptionList.length === 0 && (
-            <p style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>No items added yet.</p>
-        )}
-        {consultData.prescriptionList.map((item, index) => (
-            <div key={index} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "13px", padding: "6px 0", borderBottom: "1px solid #eee" }}>
-                <div>
-                    <strong>{item.name}</strong> <span style={{color:"#666"}}>x{item.qty}</span>
-                    {item.dispense && <span style={{ marginLeft: "8px", fontSize: "11px", color: "green", background: "#e8f5e9", padding: "2px 6px", borderRadius: "4px" }}>Deducting Stock</span>}
-                </div>
-                <button 
-                    type="button"
-                    onClick={() => setConsultData({
-                        ...consultData, 
-                        prescriptionList: consultData.prescriptionList.filter((_, i) => i !== index)
-                    })}
-                    style={{ color: "#d32f2f", border: "none", background: "none", cursor: "pointer", fontWeight: "bold", fontSize: "14px" }}
-                >✕</button>
-            </div>
-        ))}
-    </div>
-</div>
+                                <div style={{ marginTop: "10px" }}>
+                                    {consultData.prescriptionList.length === 0 && (
+                                        <p style={{ fontSize: "12px", color: "#888", fontStyle: "italic" }}>No items added yet.</p>
+                                    )}
+                                    {consultData.prescriptionList.map((item, index) => (
+                                        <div key={index} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "13px", padding: "6px 0", borderBottom: "1px solid #eee" }}>
+                                            <div>
+                                                <strong>{item.name}</strong> <span style={{color:"#666"}}>x{item.qty}</span>
+                                                {item.dispense && <span style={{ marginLeft: "8px", fontSize: "11px", color: "green", background: "#e8f5e9", padding: "2px 6px", borderRadius: "4px" }}>Deducting Stock</span>}
+                                            </div>
+                                            <button 
+                                                type="button"
+                                                onClick={() => setConsultData({
+                                                    ...consultData, 
+                                                    prescriptionList: consultData.prescriptionList.filter((_, i) => i !== index)
+                                                })}
+                                                style={{ color: "#d32f2f", border: "none", background: "none", cursor: "pointer", fontWeight: "bold", fontSize: "14px" }}
+                                            >✕</button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
 
-<label><strong>Notes:</strong><br />
-    <textarea value={consultData.notes} onChange={e => setConsultData({ ...consultData, notes: e.target.value })} rows="2" style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} placeholder="Additional observations..." />
-</label>
+                            <label><strong>Notes:</strong><br />
+                                <textarea value={consultData.notes} onChange={e => setConsultData({ ...consultData, notes: e.target.value })} rows="2" style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #ddd" }} placeholder="Additional observations..." />
+                            </label>
 
-<label style={{ background: "#e3f2fd", padding: "10px", borderRadius: "6px", marginTop: "10px", display: "block" }}>
-    <strong>Schedule Follow-up (Optional):</strong><br />
-    <input type="date" value={consultData.followUp} onChange={e => setConsultData({ ...consultData, followUp: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #bbb" }} />
-</label>
+                            <label style={{ background: "#e3f2fd", padding: "10px", borderRadius: "6px", marginTop: "10px", display: "block" }}>
+                                <strong>General Follow-up Date (Optional):</strong><br />
+                                <input type="date" value={consultData.followUp} onChange={e => setConsultData({ ...consultData, followUp: e.target.value })} style={{ width: "100%", padding: "8px", marginTop: "5px", borderRadius: "6px", border: "1px solid #bbb" }} />
+                            </label>
 
-<div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
-    <button type="submit" disabled={registerLoading}
-        style={{ flex: 1, background: registerLoading ? "#ccc" : "#4CAF50", color: "white", border: "none", padding: "12px", borderRadius: "6px", cursor: registerLoading ? "not-allowed" : "pointer", fontWeight: "bold" }}>
-        {registerLoading ? "Updating Stock..." : "Finish Consultation"}
-    </button>
-    <button type="button" onClick={() => setShowConsultModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "12px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
-</div>
+                            <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                                <button type="submit" disabled={registerLoading}
+                                    style={{ flex: 1, background: registerLoading ? "#ccc" : "#4CAF50", color: "white", border: "none", padding: "12px", borderRadius: "6px", cursor: registerLoading ? "not-allowed" : "pointer", fontWeight: "bold" }}>
+                                    {registerLoading ? "Updating Stock..." : "Finish Consultation"}
+                                </button>
+                                <button type="button" onClick={() => setShowConsultModal(false)} style={{ flex: 1, background: "#ccc", border: "none", padding: "12px", borderRadius: "6px", cursor: "pointer" }}>Cancel</button>
+                            </div>
                         </form>
                     </div>
                 </div>
