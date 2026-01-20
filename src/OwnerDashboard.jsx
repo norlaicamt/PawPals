@@ -65,8 +65,7 @@ const OwnerDashboard = () => {
   const [apptFilter, setApptFilter] = useState("Approved");
   const [approvedFilter, setApprovedFilter] = useState("Active");
   
-  const [requestEditPet, setRequestEditPet] = useState(null);;
-
+  const [requestEditPet, setRequestEditPet] = useState(null);
   // --- MOBILE SUB-TAB STATES ---
   const [isMobile, setIsMobile] = useState(window.innerWidth <= 768);
   const [apptSubTab, setApptSubTab] = useState("request"); 
@@ -107,7 +106,7 @@ const OwnerDashboard = () => {
 
   // --- CHAT EDIT STATE ---
   const [editingMessageId, setEditingMessageId] = useState(null);
-
+  
   // --- MODAL STATES ---
   const [showPetModal, setShowPetModal] = useState(false);
   const [isEditingPet, setIsEditingPet] = useState(false);
@@ -155,16 +154,42 @@ const OwnerDashboard = () => {
   });
 
   // --- PET FORM DATA ---
-  const [petName, setPetName] = useState("");
-  const [species, setSpecies] = useState("Dog");
-  const [otherSpecies, setOtherSpecies] = useState(""); 
-  const [breed, setBreed] = useState("");
-  const [otherBreed, setOtherBreed] = useState(""); 
-  const [age, setAge] = useState("");
-  const [ageUnit, setAgeUnit] = useState("Years");
-  const [gender, setGender] = useState("Male");
-  const [medicalHistory, setMedicalHistory] = useState("");
-  
+const [petName, setPetName] = useState("");
+const [species, setSpecies] = useState("Dog");
+const [otherSpecies, setOtherSpecies] = useState(""); 
+const [breed, setBreed] = useState("");
+const [otherBreed, setOtherBreed] = useState(""); 
+// New Birthdate State
+const [birthdate, setBirthdate] = useState(""); 
+const [age, setAge] = useState("");
+const [ageUnit, setAgeUnit] = useState("Years");
+const [gender, setGender] = useState("Male");
+const [medicalHistory, setMedicalHistory] = useState("");
+
+useEffect(() => {
+  if (birthdate) {
+      const today = new Date();
+      const birthDate = new Date(birthdate);
+      
+      let months = (today.getFullYear() - birthDate.getFullYear()) * 12;
+      months -= birthDate.getMonth();
+      months += today.getMonth();
+      
+      if (today.getDate() < birthDate.getDate()) {
+          months--;
+      }
+      if (months < 0) months = 0; 
+
+      if (months >= 12) {
+          setAge(Math.floor(months / 12));
+          setAgeUnit("Years");
+      } else {
+          setAge(months);
+          setAgeUnit("Months");
+      }
+  }
+}, [birthdate]);
+
   const [selectedPetId, setSelectedPetId] = useState("");
   const [apptDate, setApptDate] = useState("");
   const [apptTime, setApptTime] = useState("08:00");
@@ -220,6 +245,37 @@ const OwnerDashboard = () => {
       const interval = setInterval(checkUpcoming, 60000); 
       return () => clearInterval(interval);
   }, [myAppointments, notifiedAppts]);
+
+  // --- AUTO-CALCULATE AGE BASED ON BIRTHDATE ---
+  useEffect(() => {
+    if (birthdate) {
+        const today = new Date();
+        const birthDate = new Date(birthdate);
+        
+        // Calculate difference in months
+        let months = (today.getFullYear() - birthDate.getFullYear()) * 12;
+        months -= birthDate.getMonth();
+        months += today.getMonth();
+        
+        // Adjustment if the specific day hasn't passed yet
+        if (today.getDate() < birthDate.getDate()) {
+            months--;
+        }
+
+        if (months < 0) months = 0; // Future date handling
+
+        if (months >= 12) {
+            // If 1 year or more, show in Years
+            const years = Math.floor(months / 12);
+            setAge(years);
+            setAgeUnit("Years");
+        } else {
+            // If less than a year, show in Months
+            setAge(months);
+            setAgeUnit("Months");
+        }
+    }
+  }, [birthdate]);
 
   // --- LISTENER TO DETECT MOBILE SCREEN ---
   useEffect(() => {
@@ -606,10 +662,19 @@ const OwnerDashboard = () => {
     };
 
   const resetPetForm = () => {
-    setPetName(""); setBreed(""); setOtherBreed(""); setAge(""); setAgeUnit("Years");
-    setOtherSpecies(""); setSpecies("Dog"); setGender("Male"); setMedicalHistory(""); 
-    setIsEditingPet(false); setEditingPetId(null);
-  };
+    setPetName(""); 
+    setBreed(""); 
+    setOtherBreed(""); 
+    setAge(""); 
+    setAgeUnit("Years");
+    setBirthdate(""); // Add this line
+    setOtherSpecies(""); 
+    setSpecies("Dog"); 
+    setGender("Male"); 
+    setMedicalHistory(""); 
+    setIsEditingPet(false); 
+    setEditingPetId(null);
+};
 
   const openAddPetModal = () => { resetPetForm(); setShowPetModal(true); };
   const handlePetSubmit = async (e) => {
@@ -624,7 +689,7 @@ const OwnerDashboard = () => {
         if (breed === "Other") finalBreed = otherBreed;
         if (!finalBreed.trim()) return showToast("Please specify the breed.", "error");
     } else {
-        if (breed === "Other") finalBreed = otherBreed; // Handle generic other
+        if (breed === "Other") finalBreed = otherBreed; 
         if (!finalBreed || !finalBreed.trim()) finalBreed = "N/A";
     }
 
@@ -632,8 +697,16 @@ const OwnerDashboard = () => {
 
     try {
         const petData = { 
-            name: petName, species: finalSpecies, breed: finalBreed, 
-            age: Number(age), ageUnit, gender, medicalHistory, ownerId: user.uid, updatedAt: new Date()
+            name: petName, 
+            species: finalSpecies, 
+            breed: finalBreed, 
+            birthdate: birthdate, // Save the birthdate
+            age: Number(age), 
+            ageUnit, 
+            gender, 
+            medicalHistory, 
+            ownerId: user.uid, 
+            updatedAt: new Date()
         };
 
         if (isEditingPet && editingPetId) {
@@ -653,6 +726,7 @@ const OwnerDashboard = () => {
         setIsSaving(false); 
     }
   };
+
   
   // --- MODIFIED REACTIVATION REQUEST: Uses InputModal instead of prompt ---
   const handleReactivatePetRequest = (pet) => {
@@ -1240,92 +1314,96 @@ const OwnerDashboard = () => {
       
       {/* 1. Add/Edit Pet Modal - COMPACT LAYOUT */}
       {showPetModal && (
-          <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
-              <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"450px", maxWidth:"90%", maxHeight:"90vh", overflowY:"auto", boxShadow: "0 10px 30px rgba(0,0,0,0.3)"}}>
-                  <h3 style={{marginTop:0, color: "#333", borderBottom: "1px solid #f0f0f0", paddingBottom: "10px", marginBottom: "20px"}}>{isEditingPet ? "Edit Pet Details" : "Add New Pet"}</h3>
-                  <form onSubmit={handlePetSubmit} style={{display:"flex", flexDirection:"column", gap:"10px"}}>
-                      
-                      {/* Name - Full Width */}
-                      <div>
-                          <label style={labelStyle}>Pet's Name</label>
-                          <input type="text" placeholder="e.g. Buster" required value={petName} onChange={(e) => setPetName(e.target.value)} style={inputStyle} />
-                      </div>
-                      
-                      {/* Species - Full Width */}
-                      <div style={{ marginBottom: "10px" }}>
-    <label>Species</label>
-    <select 
-        value={species} // or registerData.species
-        onChange={(e) => setSpecies(e.target.value)} // or setRegisterData...
-        style={{ width: "100%", padding: "8px", marginTop: "5px" }}
-    >
-        <option value="Dog">Dog</option>
-        <option value="Cat">Cat</option>
-    </select>
-</div>
+    <div className="modal-overlay" style={{position:"fixed", top:0, left:0, width:"100%", height:"100%", background:"rgba(0,0,0,0.5)", display:"flex", justifyContent:"center", alignItems:"center", zIndex:2000}}>
+        <div style={{background:"white", padding:"25px", borderRadius:"12px", width:"450px", maxWidth:"90%", maxHeight:"90vh", overflowY:"auto", boxShadow: "0 10px 30px rgba(0,0,0,0.3)"}}>
+            <h3 style={{marginTop:0, color: "#333", borderBottom: "1px solid #f0f0f0", paddingBottom: "10px", marginBottom: "20px"}}>{isEditingPet ? "Edit Pet Details" : "Add New Pet"}</h3>
+            <form onSubmit={handlePetSubmit} style={{display:"flex", flexDirection:"column", gap:"10px"}}>
+                
+                {/* Name */}
+                <div>
+                    <label style={labelStyle}>Pet's Name</label>
+                    <input type="text" placeholder="e.g. Buster" required value={petName} onChange={(e) => setPetName(e.target.value)} style={inputStyle} />
+                </div>
+                
+                {/* Species */}
+                <div>
+                    <label style={labelStyle}>Species</label>
+                    <select 
+                        value={species} 
+                        onChange={(e) => setSpecies(e.target.value)} 
+                        style={selectStyle} // Used selectStyle for consistent arrow icon
+                    >
+                        <option value="Dog">Dog</option>
+                        <option value="Cat">Cat</option>
+                    </select>
+                </div>
 
-                      {/* Breed - Full Width (Appears Below Species) */}
-                      <div>
-                          <label style={labelStyle}>Breed</label>
-                           {/* Breed Logic: Dropdown if Dog/Cat, else Text Input */}
-                          {["Dog", "Cat"].includes(species) ? (
-                              <select value={breed} onChange={(e) => setBreed(e.target.value)} style={selectStyle}>
-                                  <option value="">-- Select --</option>
-                                  {(species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => <option key={b} value={b}>{b}</option>)}
-                              </select>
-                          ) : (
-                              <input type="text" placeholder="Optional" value={breed} onChange={(e) => setBreed(e.target.value)} style={inputStyle} />
-                          )}
-                      </div>
+                {/* Breed (Standard Logic) */}
+                <div>
+                    <label style={labelStyle}>Breed</label>
+                    {["Dog", "Cat"].includes(species) ? (
+                        <select value={breed} onChange={(e) => setBreed(e.target.value)} style={selectStyle}>
+                            <option value="">-- Select --</option>
+                            {(species === "Dog" ? DOG_BREEDS : CAT_BREEDS).map(b => <option key={b} value={b}>{b}</option>)}
+                        </select>
+                    ) : (
+                        <input type="text" placeholder="Optional" value={breed} onChange={(e) => setBreed(e.target.value)} style={inputStyle} />
+                    )}
+                </div>
 
-                      {/* Conditional: If "Other" species or "Other" breed selected, show text box */}
-                      {(breed === "Other" && ["Dog", "Cat"].includes(species)) && (
-                          <div>
-                              <label style={labelStyle}>Specify {species === "Other" ? "Species" : "Breed"}</label>
-                              <input type="text" placeholder={species === "Other" ? "e.g. Turtle" : "e.g. Labradoodle"} value={species === "Other" ? otherSpecies : otherBreed} onChange={(e) => species === "Other" ? setOtherSpecies(e.target.value) : setOtherBreed(e.target.value)} style={inputStyle} />
-                          </div>
-                      )}
+                {/* Conditional: "Other" Breed Input */}
+                {(breed === "Other" && ["Dog", "Cat"].includes(species)) && (
+                    <div>
+                        <label style={labelStyle}>Specify Breed</label>
+                        <input type="text" placeholder="e.g. Labradoodle" value={otherBreed} onChange={(e) => setOtherBreed(e.target.value)} style={inputStyle} />
+                    </div>
+                )}
 
-                      {/* Row: Gender & Age (Side-by-Side to save vertical space) */}
-                      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px"}}>
-                          {/* Gender */}
-                          <div>
-                            <label style={labelStyle}>Gender</label>
-                            <select value={gender} onChange={(e) => setGender(e.target.value)} style={selectStyle}>
-                                <option value="Male">♂ Male</option>
-                                <option value="Female">♀ Female</option>
-                                <option value="Unknown">Unknown</option>
-                            </select>
-                          </div>
+                {/* NEW ROW: Gender & Birthdate */}
+                <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px"}}>
+                    {/* Gender */}
+                    <div>
+                    <label style={labelStyle}>Gender</label>
+                    <select value={gender} onChange={(e) => setGender(e.target.value)} style={selectStyle}>
+                        <option value="Male">♂ Male</option>
+                        <option value="Female">♀ Female</option>
+                        <option value="Unknown">Unknown</option>
+                    </select>
+                    </div>
 
-                          {/* Age */}
-                          <div>
-                             <label style={labelStyle}>Age</label>
-                             <div style={{display: "flex", gap: "5px"}}>
-                                <input type="number" placeholder="0" required value={age} onChange={(e) => setAge(e.target.value)} style={{...inputStyle, flex: "1"}} min="0" />
-                                <select value={ageUnit} onChange={(e) => setAgeUnit(e.target.value)} style={{...selectStyle, width: "auto", flex: "1.5", paddingRight: "25px", minWidth: "80px"}}>
-                                    <option value="Years">Yrs</option>
-                                    <option value="Months">Mos</option>
-                                </select>
-                             </div>
-                          </div>
-                      </div>
+                    {/* Birthdate (Auto-calculates Age) */}
+                    <div>
+                        <label style={labelStyle}>Birthdate</label>
+                        <input 
+                            type="date" 
+                            required 
+                            value={birthdate} 
+                            max={new Date().toISOString().split("T")[0]} // Prevent future dates
+                            onChange={(e) => setBirthdate(e.target.value)} 
+                            style={inputStyle} 
+                        />
+                        {/* Age Preview */}
+                        <div style={{fontSize: "11px", color: "#2196F3", marginTop: "4px", fontWeight: "bold", textAlign: "right"}}>
+                            {birthdate ? `Age: ${age} ${ageUnit}` : "Select date to calc age"}
+                        </div>
+                    </div>
+                </div>
 
-                      {/* Medical History - Full Width */}
-                      <div>
-                        <label style={labelStyle}>Medical History (Optional)</label>
-                        <textarea placeholder="Allergies, past surgeries, etc." value={medicalHistory} onChange={(e) => setMedicalHistory(e.target.value)} style={{...inputStyle, resize: "vertical"}} rows="3" />
-                      </div>
-                      
-                      {/* Action Buttons */}
-                      <div style={{display:"flex", gap:"10px", marginTop:"10px", borderTop: "1px solid #f0f0f0", paddingTop: "15px"}}>
-                          <button type="button" onClick={() => setShowPetModal(false)} style={{flex:1, background:"#f5f5f5", color:"#555", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight: "bold"}}>Cancel</button>
-                          <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight: "bold"}}>Save Pet</button>
-                      </div>
-                  </form>
-              </div>
-          </div>
-      )}
+                {/* Medical History */}
+                <div>
+                    <label style={labelStyle}>Medical History (Optional)</label>
+                    <textarea placeholder="Allergies, past surgeries, etc." value={medicalHistory} onChange={(e) => setMedicalHistory(e.target.value)} style={{...inputStyle, resize: "vertical"}} rows="3" />
+                </div>
+                
+                {/* Buttons */}
+                <div style={{display:"flex", gap:"10px", marginTop:"10px", borderTop: "1px solid #f0f0f0", paddingTop: "15px"}}>
+                    <button type="button" onClick={() => setShowPetModal(false)} style={{flex:1, background:"#f5f5f5", color:"#555", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight: "bold"}}>Cancel</button>
+                    <button type="submit" style={{flex:1, background:"#2196F3", color:"white", border:"none", padding:"12px", borderRadius:"6px", cursor:"pointer", fontWeight: "bold"}}>Save Pet</button>
+                </div>
+            </form>
+        </div>
+    </div>
+)}
 
       {/* 2. Cancel Modal */}
       {showCancelModal && (

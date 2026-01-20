@@ -965,6 +965,7 @@ const handleRejectRequest = async (reqId) => {
                     <tr style={{ textAlign: "left", color: "#666" }}>
                         <th style={{ padding: "15px" }}>Pet Name</th>
                         <th style={{ padding: "15px" }}>Species/Breed</th>
+                        <th style={{ padding: "15px" }}>Birthdate / Age</th> {/* <--- ADD HEADER */}
                         <th style={{ padding: "15px" }}>Owner</th>
                         <th style={{ padding: "15px" }}>Actions</th>
                     </tr>
@@ -974,6 +975,8 @@ const handleRejectRequest = async (reqId) => {
                       <tr key={pet.id} style={{ borderBottom: "1px solid #f1f1f1" }}>
                         <td style={{ padding: "15px", fontWeight: "bold" }}>{pet.name}</td>
                         <td style={{ padding: "15px" }}>{pet.species} ({pet.breed})</td>
+                        <td style={{ padding: "15px" }}>
+                         <div>{pet.birthdate || "N/A"}</div><div style={{ fontSize: "12px", color: "#888" }}>{pet.age} {pet.ageUnit}</div></td>
                         <td style={{ padding: "15px" }}>{users.find(u => u.id === pet.ownerId)?.firstName || "Unknown"}</td>
                         <td style={{ padding: "15px" }}>
                           <button onClick={() => handleManualArchive(pet.id)} style={{ padding: "6px 12px", background: "#eee", color: "#666", border: "none", borderRadius: "6px", cursor: "pointer", fontSize: "12px" }}>Archive</button>
@@ -1021,7 +1024,9 @@ const handleRejectRequest = async (reqId) => {
                                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "20px", borderBottom: "1px solid #eee", paddingBottom: "15px" }}>
                                         <div>
                                             <h2 style={{ margin: "0 0 5px 0", color: "#333" }}>{viewingRecord.name}</h2>
-                                            <span style={{ fontSize: "14px", color: "#666", background: "#f5f5f5", padding: "4px 10px", borderRadius: "15px" }}>{viewingRecord.species} • {viewingRecord.breed} • {viewingRecord.gender}</span>
+                                            <span style={{ fontSize: "14px", color: "#666", background: "#f5f5f5", padding: "4px 10px", borderRadius: "15px" }}>
+                                             {viewingRecord.species} • {viewingRecord.breed} • {viewingRecord.gender} • Born: {viewingRecord.birthdate || "N/A"}
+                                            </span>
                                         </div>
                                         <button onClick={() => handlePrintSinglePetHistory(viewingRecord)} style={{ height: "fit-content", background: "#607D8B", color: "white", border: "none", padding: "8px 15px", borderRadius: "6px", cursor: "pointer", display: "flex", alignItems: "center", gap: "5px" }}>
                                             <span>🖨️</span> Print History
@@ -1360,12 +1365,13 @@ const handleRejectRequest = async (reqId) => {
                 <>
                     <h2 style={{ textAlign: "center", fontSize: "18px" }}>Registered Pets Report</h2>
                     <table className="print-table">
-                        <thead><tr><th>Pet Name</th><th>Species/Breed</th><th>Age/Gender</th><th>Owner Name</th><th>Contact</th></tr></thead>
+                        <thead><tr><th>Pet Name</th><th>Species/Breed</th><th>Birthdate</th><th>Age/Gender</th><th>Owner Name</th><th>Contact</th></tr></thead>
                         <tbody>
                             {pets.filter(p => selectedPetsForPrint.includes(p.id)).map(pet => (
                                 <tr key={pet.id}>
                                     <td>{pet.name}</td>
                                     <td>{pet.species} / {pet.breed}</td>
+                                    <td>{pet.birthdate || "N/A"}</td> {/* <--- ADD THIS COLUMN */}
                                     <td>{pet.age} / {pet.gender}</td>
                                     <td>{users.find(u => u.id === pet.ownerId)?.firstName}</td>
                                     <td>
@@ -1390,7 +1396,7 @@ const handleRejectRequest = async (reqId) => {
                         <div><strong>Patient Name:</strong> {viewingRecord.name}</div>
                         <div><strong>Species/Breed:</strong> {viewingRecord.species} / {viewingRecord.breed}</div>
                         <div><strong>Owner:</strong> {users.find(u => u.id === viewingRecord.ownerId)?.firstName || "N/A"}</div>
-                        <div><strong>Age/Gender:</strong> {viewingRecord.age} {viewingRecord.ageUnit} / {viewingRecord.gender}</div>
+                        <div><strong>Birthdate:</strong> {viewingRecord.birthdate || "N/A"} ({viewingRecord.age} {viewingRecord.ageUnit}) / {viewingRecord.gender}</div>
                     </div>
 
                     <table className="print-table">

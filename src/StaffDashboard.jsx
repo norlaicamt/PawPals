@@ -208,11 +208,42 @@ const StaffDashboard = () => {
         species: "Dog",
         breed: "",
         otherBreed: "",
+        birthdate: "",
         age: "",
         ageUnit: "Years",
         gender: "Male",
         medicalHistory: ""
     });
+
+    // --- AUTO-CALCULATE AGE FOR REGISTRATION ---
+    useEffect(() => {
+        if (registerData.birthdate) {
+            const today = new Date();
+            const birthDate = new Date(registerData.birthdate);
+            
+            let months = (today.getFullYear() - birthDate.getFullYear()) * 12;
+            months -= birthDate.getMonth();
+            months += today.getMonth();
+            
+            if (today.getDate() < birthDate.getDate()) {
+                months--;
+            }
+            if (months < 0) months = 0; 
+    
+            let calculatedAge = "";
+            let calculatedUnit = "Years";
+    
+            if (months >= 12) {
+                calculatedAge = Math.floor(months / 12);
+                calculatedUnit = "Years";
+            } else {
+                calculatedAge = months;
+                calculatedUnit = "Months";
+            }
+            
+            setRegisterData(prev => ({ ...prev, age: calculatedAge, ageUnit: calculatedUnit }));
+        }
+    }, [registerData.birthdate]);
 
     // --- QUICK USAGE MODAL STATE ---
     const [usageModal, setUsageModal] = useState({
@@ -801,6 +832,7 @@ const StaffDashboard = () => {
                 name: registerData.petName.trim(),
                 species: registerData.species,
                 breed: registerData.breed === "Other" ? registerData.otherBreed : registerData.breed,
+                birthdate: registerData.birthdate,
                 age: registerData.age,
                 ageUnit: registerData.ageUnit,
                 gender: registerData.gender,
@@ -1597,7 +1629,7 @@ style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer"
                 <h2 style={{ marginTop: 0 }}>{viewingPet.name} <span style={{ fontSize: "12px", color: "#666", fontWeight: "normal" }}>({viewingPet.species} - {viewingPet.breed})</span></h2>
                 <p><strong>Owner:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.firstName} {owners.find(o => o.id === viewingPet.ownerId)?.lastName}</p>
                 <p><strong>Contact:</strong> {owners.find(o => o.id === viewingPet.ownerId)?.phone || owners.find(o => o.id === viewingPet.ownerId)?.phoneNumber || "N/A"}</p>
-                <p><strong>Age:</strong> {viewingPet.age} | <strong>Gender:</strong> {viewingPet.gender}</p>
+                <p><strong>Birthdate:</strong> {viewingPet.birthdate || "N/A"} | <strong>Age:</strong> {viewingPet.age} {viewingPet.ageUnit} | <strong>Gender:</strong> {viewingPet.gender}</p>
 
                 <hr style={{ margin: "20px 0", border: "0", borderTop: "1px solid #ddd" }} />
 
@@ -2135,6 +2167,18 @@ style={{ background: "none", border: "none", fontSize: "24px", cursor: "pointer"
                                                 style={{ padding: "10px", borderRadius: "6px", border: "1px solid #ccc" }}
                                             />
                                         )}
+
+                                        <div style={{ marginBottom: "12px" }}>
+    <input
+        type="date"
+        placeholder="Birthdate"
+        required
+        max={new Date().toISOString().split("T")[0]}
+        value={registerData.birthdate}
+        onChange={(e) => setRegisterData({ ...registerData, birthdate: e.target.value })}
+        style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #ccc", boxSizing: "border-box" }}
+    />
+</div>
 
                                         <div style={{ display: "flex", gap: "10px" }}>
                                             <div style={{ flex: 1 }}>

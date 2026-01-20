@@ -27,19 +27,23 @@ const EditPetModal = ({ pet, onClose }) => {
 
   const initialAge = getInitialAgeParts(pet.age);
   
-  const [ageNum, setAgeNum] = useState(initialAge.num);
-  const [ageUnit, setAgeUnit] = useState(initialAge.unit);
-
+  // Initialize formData with birthdate if it exists in the DB
   const [formData, setFormData] = useState({
     name: pet.name || "",
     breed: pet.breed || "",
     gender: pet.gender || "",
-    species: pet.species || ""
+    species: pet.species || "",
+    birthdate: pet.birthdate || "" // Add this
   });
   
+  // We keep these for display, but they will be calculated
+  const [ageNum, setAgeNum] = useState(initialAge.num);
+  const [ageUnit, setAgeUnit] = useState(initialAge.unit);
+
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+
 
   // --- HELPER LOGIC FOR DROPDOWNS ---
   // 1. Determine which species is selected for the dropdown ("Other" if not Dog/Cat)
@@ -74,14 +78,6 @@ const EditPetModal = ({ pet, onClose }) => {
      setFormData({ ...formData, breed: e.target.value });
   };
 
-  const handleAgeNumChange = (e) => {
-    setAgeNum(e.target.value);
-  };
-
-  const handleAgeUnitChange = (e) => {
-    setAgeUnit(e.target.value);
-  };
-
   const handleSubmitRequest = async (e) => {
     e.preventDefault();
     if (!reason.trim()) {
@@ -99,7 +95,8 @@ const EditPetModal = ({ pet, onClose }) => {
         ownerEmail: auth.currentUser.email || "Unknown",
         petName: pet.name,
         originalData: pet,
-        newData: { ...formData, age: finalAgeString },
+        // Include birthdate in newData
+        newData: { ...formData, age: finalAgeString }, 
         reason: reason,
         status: "pending",
         createdAt: new Date(),
@@ -144,6 +141,29 @@ const EditPetModal = ({ pet, onClose }) => {
       </div>
     );
   }
+
+  const handleBirthdateChange = (e) => {
+      const newDate = e.target.value;
+      setFormData({ ...formData, birthdate: newDate });
+
+      if (newDate) {
+        const today = new Date();
+        const birthDate = new Date(newDate);
+        let months = (today.getFullYear() - birthDate.getFullYear()) * 12;
+        months -= birthDate.getMonth();
+        months += today.getMonth();
+        if (today.getDate() < birthDate.getDate()) months--;
+        if (months < 0) months = 0;
+
+        if (months >= 12) {
+            setAgeNum(Math.floor(months / 12));
+            setAgeUnit("Years");
+        } else {
+            setAgeNum(months);
+            setAgeUnit("Months");
+        }
+      }
+  };
 
   return (
     <div style={{
@@ -226,27 +246,22 @@ const EditPetModal = ({ pet, onClose }) => {
           </div>
 
           {/* Age Section */}
+          {/* Birthdate Section (Replaces manual Age input) */}
           <div>
-            <label style={{fontSize: "12px", fontWeight: "bold"}}>Age:</label>
-            <div style={{display: "flex", gap: "10px"}}>
-                <input 
-                    type="number" 
-                    value={ageNum} 
-                    onChange={handleAgeNumChange} 
-                    placeholder="e.g. 1"
-                    min="0"
-                    step="0.1"
-                    required
-                    style={{flex: 1, padding: "8px"}} 
-                />
-                <select 
-                    value={ageUnit} 
-                    onChange={handleAgeUnitChange}
-                    style={{flex: 1, padding: "8px"}}
-                >
-                    <option value="Years">Years</option>
-                    <option value="Months">Months</option>
-                </select>
+            <label style={{fontSize: "12px", fontWeight: "bold"}}>Birthdate:</label>
+            <input 
+                type="date"
+                name="birthdate"
+                value={formData.birthdate || ""}
+                onChange={handleBirthdateChange}
+                max={new Date().toISOString().split("T")[0]} // Prevent future dates
+                required
+                style={{width: "100%", padding: "8px", boxSizing: "border-box", borderRadius: "4px", border: "1px solid #ccc"}}
+            />
+            
+            {/* Read-only view of what the new age will be calculated as */}
+            <div style={{marginTop: "5px", padding: "8px", background: "#f5f5f5", borderRadius: "4px", fontSize: "13px", color: "#555", border: "1px solid #eee"}}>
+                Calculated Age: <strong>{ageNum} {ageUnit}</strong>
             </div>
           </div>
 
@@ -256,7 +271,7 @@ const EditPetModal = ({ pet, onClose }) => {
             onChange={(e) => setReason(e.target.value)} 
             placeholder="Why are you updating this?"
             required
-            style={{padding: "8px", minHeight: "60px"}}
+            style={{padding: "8px", minHeight: "60px", width: "100%", boxSizing: "border-box"}}
           />
 
           <div style={{display: "flex", gap: "10px", marginTop: "15px"}}>
